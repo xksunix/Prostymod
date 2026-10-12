@@ -6,7 +6,7 @@ using System.Text;
 using MelonLoader;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(GangBeastsJiggle.JiggleMod), "Gang Beasts Jiggle", "2.0.0", "xksunix")]
+[assembly: MelonInfo(typeof(GangBeastsJiggle.JiggleMod), "Gang Beasts Jiggle", "2.1.0", "xksunix")]
 
 namespace GangBeastsJiggle
 {
@@ -54,7 +54,7 @@ namespace GangBeastsJiggle
             try
             {
                 _logPath = Path.Combine(Directory.GetParent(Application.dataPath).FullName, "GangBeastsJiggle_log.txt");
-                File.WriteAllText(_logPath, "Gang Beasts Jiggle 2.0.0\r\n");
+                File.WriteAllText(_logPath, "Gang Beasts Jiggle 2.1.0\r\n");
             }
             catch { _logPath = null; }
             Log("Zaladowany. Log: " + _logPath);
@@ -72,8 +72,82 @@ namespace GangBeastsJiggle
             if (_errors++ < 10) Log("BLAD (" + where + "): " + e);
         }
 
+        private bool _keysBroken;
+        private string _toast = "";
+        private float _toastUntil;
+
+        private void Toast(string msg)
+        {
+            _toast = msg;
+            _toastUntil = Time.unscaledTime + 2.5f;
+            Log(msg);
+        }
+
+        private static float Round(float v) { return Mathf.Round(v * 100f) / 100f; }
+
+        // Klawisze w grze: F6 wl/wyl, F7/F8 rozmiar -/+, F9/F10 sila drgan -/+
+        private void HandleKeys()
+        {
+            if (_keysBroken) return;
+            try
+            {
+                if (Input.GetKeyDown(KeyCode.F6))
+                {
+                    Enabled.Value = !Enabled.Value;
+                    Toast("Jiggle: " + (Enabled.Value ? "WLACZONY" : "WYLACZONY"));
+                }
+                if (Input.GetKeyDown(KeyCode.F7))
+                {
+                    BaseScale.Value = Round(Mathf.Max(1f, BaseScale.Value - 0.1f));
+                    Toast("Rozmiar (BaseScale): " + BaseScale.Value);
+                }
+                if (Input.GetKeyDown(KeyCode.F8))
+                {
+                    BaseScale.Value = Round(Mathf.Min(4f, BaseScale.Value + 0.1f));
+                    Toast("Rozmiar (BaseScale): " + BaseScale.Value);
+                }
+                if (Input.GetKeyDown(KeyCode.F9))
+                {
+                    JiggleScale.Value = Round(Mathf.Max(0f, JiggleScale.Value - 0.1f));
+                    PositionJiggle.Value = Round(Mathf.Max(0f, PositionJiggle.Value - 0.1f));
+                    Toast("Sila drgan: " + JiggleScale.Value);
+                }
+                if (Input.GetKeyDown(KeyCode.F10))
+                {
+                    JiggleScale.Value = Round(Mathf.Min(3f, JiggleScale.Value + 0.1f));
+                    PositionJiggle.Value = Round(Mathf.Min(2f, PositionJiggle.Value + 0.1f));
+                    Toast("Sila drgan: " + JiggleScale.Value);
+                }
+            }
+            catch (Exception e)
+            {
+                _keysBroken = true;
+                Log("Klawisze niedostepne (gra nie uzywa starego Input): " + e.Message);
+            }
+        }
+
+        public override void OnApplicationQuit()
+        {
+            try { MelonPreferences.Save(); } catch { }
+        }
+
+        public override void OnGUI()
+        {
+            if (Time.unscaledTime > _toastUntil || _toast.Length == 0) return;
+            try
+            {
+                var style = new GUIStyle(GUI.skin.label);
+                style.fontSize = 22;
+                style.fontStyle = FontStyle.Bold;
+                style.normal.textColor = Color.white;
+                GUI.Label(new Rect(20f, 20f, 700f, 40f), "[Jiggle] " + _toast, style);
+            }
+            catch { }
+        }
+
         public override void OnUpdate()
         {
+            HandleKeys();
             if (!Enabled.Value || Time.unscaledTime < _nextScan) return;
             _nextScan = Time.unscaledTime + 2f;
             try { Scan(); }
