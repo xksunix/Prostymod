@@ -1,6 +1,5 @@
-# Gang Beasts Jiggle (BepInEx 5)
+# Gang Beasts Jiggle (MelonLoader)
 
-1. Wrzuc `GangBeastsJiggle.dll` do `Gang Beasts/BepInEx/plugins/`.
-2. Uruchom gre. Powstanie `BepInEx/config/xksunix.gangbeasts.jiggle.cfg` oraz log `BepInEx/LogOutput.log`.
-3. W logu szukaj linii `Mesh '...' kosci (...)` - to lista kosci postaci. Jesli nic sie nie trzesie,
-   wpisz w configu `BonePatterns` nazwe kosci miednicy z tej listy.
+1. Wrzuc `GangBeastsJiggle.dll` do `Gang Beasts/Mods/`.
+2. Uruchom gre. Konfiguracja: `UserData/MelonPreferences.cfg`, log: `MelonLoader/Latest.log`.
+3. Jesli nic sie nie trzesie, w logu znajdz `Mesh '...' kosci (...)` i wpisz nazwe kosci miednicy w `BonePatterns`.

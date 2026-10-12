@@ -1,57 +1,54 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using BepInEx;
-using BepInEx.Configuration;
+using MelonLoader;
 using UnityEngine;
+
+[assembly: MelonInfo(typeof(GangBeastsJiggle.JiggleMod), "Gang Beasts Jiggle", "1.1.0", "xksunix")]
 
 namespace GangBeastsJiggle
 {
-    [BepInPlugin("xksunix.gangbeasts.jiggle", "Gang Beasts Jiggle", "1.0.0")]
-    public class Plugin : BaseUnityPlugin
+    public class JiggleMod : MelonMod
     {
-        internal static Plugin Instance;
-        internal static ConfigEntry<bool> Enabled;
-        internal static ConfigEntry<string> IncludePatterns;
-        internal static ConfigEntry<string> ExcludePatterns;
-        internal static ConfigEntry<float> Stiffness;
-        internal static ConfigEntry<float> Damping;
-        internal static ConfigEntry<float> Amplitude;
-        internal static ConfigEntry<float> Reaction;
-        internal static ConfigEntry<float> MaxOffset;
-        internal static ConfigEntry<string> Mode;
-        internal static ConfigEntry<bool> DumpBones;
+        internal static MelonPreferences_Entry<bool> Enabled;
+        internal static MelonPreferences_Entry<string> IncludePatterns;
+        internal static MelonPreferences_Entry<string> ExcludePatterns;
+        internal static MelonPreferences_Entry<string> Mode;
+        internal static MelonPreferences_Entry<float> Stiffness;
+        internal static MelonPreferences_Entry<float> Damping;
+        internal static MelonPreferences_Entry<float> Amplitude;
+        internal static MelonPreferences_Entry<float> Reaction;
+        internal static MelonPreferences_Entry<float> MaxOffset;
+        internal static MelonPreferences_Entry<bool> DumpBones;
 
         private readonly HashSet<int> _seen = new HashSet<int>();
         private readonly HashSet<string> _dumped = new HashSet<string>();
         private float _nextScan;
 
-        private void Awake()
+        public override void OnInitializeMelon()
         {
-            Instance = this;
-            Enabled = Config.Bind("General", "Enabled", true, "Wlacza / wylacza moda.");
-            IncludePatterns = Config.Bind("General", "BonePatterns", "butt,hip,pelvis,ass",
-                "Fragmenty nazw kosci (po przecinku, bez rozrozniania wielkosci liter), ktore maja sie trzasc.");
-            ExcludePatterns = Config.Bind("General", "ExcludePatterns", "hand,arm,leg,foot,head,finger",
-                "Kosci z tymi fragmentami w nazwie sa pomijane.");
-            Mode = Config.Bind("Jiggle", "Mode", "Scale",
-                "Scale = ugniatanie/rozciaganie kosci, Position = przesuwanie kosci, Both = jedno i drugie.");
-            Stiffness = Config.Bind("Jiggle", "Stiffness", 90f, "Sztywnosc sprezyny (wiecej = szybsze drgania).");
-            Damping = Config.Bind("Jiggle", "Damping", 5f, "Tlumienie (wiecej = szybciej sie uspokaja).");
-            Amplitude = Config.Bind("Jiggle", "Amplitude", 0.25f, "Sila efektu (skala / przesuniecie).");
-            Reaction = Config.Bind("Jiggle", "Reaction", 0.6f, "Jak mocno ruch postaci wprawia kosc w drgania.");
-            MaxOffset = Config.Bind("Jiggle", "MaxOffset", 1.0f, "Maksymalne wychylenie sprezyny (ogranicza przesadne efekty).");
-            DumpBones = Config.Bind("Debug", "DumpBones", true,
-                "Zapisuje do logu liste kosci kazdej postaci - przydatne do dopasowania BonePatterns.");
-            Logger.LogInfo("Gang Beasts Jiggle zaladowany.");
+            var cat = MelonPreferences.CreateCategory("GangBeastsJiggle", "Gang Beasts Jiggle");
+            Enabled = cat.CreateEntry("Enabled", true, "Wlacza / wylacza moda");
+            IncludePatterns = cat.CreateEntry("BonePatterns", "butt,hip,pelvis,ass",
+                "Fragmenty nazw kosci (po przecinku), ktore maja sie trzasc");
+            ExcludePatterns = cat.CreateEntry("ExcludePatterns", "hand,arm,leg,foot,head,finger",
+                "Kosci z tymi fragmentami w nazwie sa pomijane");
+            Mode = cat.CreateEntry("Mode", "Scale", "Scale, Position albo Both");
+            Stiffness = cat.CreateEntry("Stiffness", 90f, "Sztywnosc sprezyny");
+            Damping = cat.CreateEntry("Damping", 5f, "Tlumienie");
+            Amplitude = cat.CreateEntry("Amplitude", 0.25f, "Sila efektu");
+            Reaction = cat.CreateEntry("Reaction", 0.6f, "Reakcja na ruch postaci");
+            MaxOffset = cat.CreateEntry("MaxOffset", 1.0f, "Maksymalne wychylenie");
+            DumpBones = cat.CreateEntry("DumpBones", true, "Zapisuje liste kosci postaci do logu");
+            LoggerInstance.Msg("Gang Beasts Jiggle zaladowany.");
         }
 
-        private void Update()
+        public override void OnUpdate()
         {
             if (!Enabled.Value || Time.unscaledTime < _nextScan) return;
             _nextScan = Time.unscaledTime + 2f;
             try { Scan(); }
-            catch (Exception e) { Logger.LogError("Scan error: " + e); }
+            catch (Exception e) { LoggerInstance.Error("Scan error: " + e); }
         }
 
         private static string[] Split(string s)
@@ -71,8 +68,8 @@ namespace GangBeastsJiggle
         {
             string[] inc = Split(IncludePatterns.Value);
             string[] exc = Split(ExcludePatterns.Value);
-            var meshes = FindObjectsOfType<SkinnedMeshRenderer>();
-            foreach (var smr in meshes)
+            SkinnedMeshRenderer[] meshes = UnityEngine.Object.FindObjectsOfType<SkinnedMeshRenderer>();
+            foreach (SkinnedMeshRenderer smr in meshes)
             {
                 Transform[] bones = smr.bones;
                 if (bones == null || bones.Length < 3) continue;
@@ -83,34 +80,28 @@ namespace GangBeastsJiggle
                     if (_dumped.Add(key))
                     {
                         var names = new List<string>();
-                        foreach (var b in bones) if (b != null) names.Add(b.name);
-                        Logger.LogInfo("Mesh '" + smr.name + "' kosci (" + bones.Length + "): " + string.Join(", ", names.ToArray()));
+                        foreach (Transform b in bones) if (b != null) names.Add(b.name);
+                        LoggerInstance.Msg("Mesh '" + smr.name + "' kosci (" + bones.Length + "): " + string.Join(", ", names.ToArray()));
                     }
                 }
 
-                foreach (var bone in bones)
+                foreach (Transform bone in bones)
                 {
                     if (bone == null) continue;
                     if (!Matches(bone.name, inc) || Matches(bone.name, exc)) continue;
                     if (!_seen.Add(bone.GetInstanceID())) continue;
                     bone.gameObject.AddComponent<JiggleBone>();
-                    Logger.LogInfo("Jiggle dodany do kosci: " + bone.name + " (mesh " + smr.name + ")");
+                    LoggerInstance.Msg("Jiggle dodany do kosci: " + bone.name + " (mesh " + smr.name + ")");
                 }
             }
         }
     }
 
-    /// <summary>Sprezyna na kosci: ruch kosci wprawia ja w drgania, efekt jest tylko wizualny.</summary>
+    /// <summary>Sprezyna na kosci - efekt tylko wizualny, nie rusza fizyki.</summary>
     public class JiggleBone : MonoBehaviour
     {
-        private Vector3 _lastPos;
-        private Vector3 _lastVel;
-        private Vector3 _offset;      // wychylenie sprezyny (przestrzen swiata)
-        private Vector3 _springVel;
-        private Vector3 _origScale;
-        private Vector3 _origLocalPos;
-        private bool _applied;
-        private bool _init;
+        private Vector3 _lastPos, _lastVel, _offset, _springVel, _origScale, _origLocalPos;
+        private bool _applied, _init;
 
         private void OnEnable()
         {
@@ -134,40 +125,33 @@ namespace GangBeastsJiggle
 
         private void LateUpdate()
         {
-            if (!Plugin.Enabled.Value) return;
-            float dt = Time.deltaTime;
-            if (dt <= 0f) return;
-            if (dt > 0.05f) dt = 0.05f;
+            if (!JiggleMod.Enabled.Value) return;
+            float rawDt = Time.deltaTime;
+            if (rawDt <= 0f) return;
+            float dt = Mathf.Min(rawDt, 0.05f);
 
             Vector3 pos = transform.position;
-            if (!_init)
-            {
-                _lastPos = pos; _lastVel = Vector3.zero; _init = true;
-            }
+            if (!_init) { _lastPos = pos; _lastVel = Vector3.zero; _init = true; }
 
-            // przyspieszenie kosci -> sila bezwladnosci na sprezyne
-            Vector3 vel = (pos - _lastPos) / Time.deltaTime;
-            Vector3 acc = (vel - _lastVel) / Time.deltaTime;
+            Vector3 vel = (pos - _lastPos) / rawDt;
+            Vector3 acc = (vel - _lastVel) / rawDt;
             _lastPos = pos; _lastVel = vel;
 
-            float k = Plugin.Stiffness.Value;
-            float c = Plugin.Damping.Value;
-            Vector3 force = -acc * 0.01f * Plugin.Reaction.Value - k * _offset - c * _springVel;
+            float k = JiggleMod.Stiffness.Value;
+            float c = JiggleMod.Damping.Value;
+            Vector3 force = -acc * 0.01f * JiggleMod.Reaction.Value - k * _offset - c * _springVel;
             _springVel += force * dt;
             _offset += _springVel * dt;
-            if (_offset.magnitude > Plugin.MaxOffset.Value)
-                _offset = _offset.normalized * Plugin.MaxOffset.Value;
+            float max = JiggleMod.MaxOffset.Value;
+            if (_offset.magnitude > max) _offset = _offset.normalized * max;
 
-            if (_applied) return; // zabezpieczenie przed podwojnym nalozeniem w jednej klatce
+            if (_applied) return;
             _origScale = transform.localScale;
             _origLocalPos = transform.localPosition;
 
-            string mode = Plugin.Mode.Value;
-            float amp = Plugin.Amplitude.Value;
-            bool scale = mode == "Scale" || mode == "Both";
-            bool position = mode == "Position" || mode == "Both";
-
-            if (scale)
+            string mode = JiggleMod.Mode.Value;
+            float amp = JiggleMod.Amplitude.Value;
+            if (mode == "Scale" || mode == "Both")
             {
                 Vector3 l = transform.InverseTransformDirection(_offset);
                 transform.localScale = new Vector3(
@@ -175,10 +159,8 @@ namespace GangBeastsJiggle
                     _origScale.y * (1f + Mathf.Abs(l.y) * amp),
                     _origScale.z * (1f + Mathf.Abs(l.z) * amp));
             }
-            if (position)
-            {
+            if (mode == "Position" || mode == "Both")
                 transform.position = transform.position + _offset * amp;
-            }
             _applied = true;
         }
 
