@@ -6,49 +6,58 @@ using System.Text;
 using MelonLoader;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(GangBeastsJiggle.JiggleMod), "Gang Beasts Jiggle", "1.2.0", "xksunix")]
+[assembly: MelonInfo(typeof(GangBeastsJiggle.JiggleMod), "Gang Beasts Jiggle", "2.0.0", "xksunix")]
 
 namespace GangBeastsJiggle
 {
     public class JiggleMod : MelonMod
     {
         internal static MelonPreferences_Entry<bool> Enabled;
+        internal static MelonPreferences_Entry<string> ForceBone;
         internal static MelonPreferences_Entry<string> IncludePatterns;
         internal static MelonPreferences_Entry<string> ExcludePatterns;
-        internal static MelonPreferences_Entry<string> Mode;
+        internal static MelonPreferences_Entry<float> BaseScale;
+        internal static MelonPreferences_Entry<float> JiggleScale;
+        internal static MelonPreferences_Entry<float> PositionJiggle;
         internal static MelonPreferences_Entry<float> Stiffness;
         internal static MelonPreferences_Entry<float> Damping;
-        internal static MelonPreferences_Entry<float> Amplitude;
         internal static MelonPreferences_Entry<float> Reaction;
         internal static MelonPreferences_Entry<float> MaxOffset;
 
+        internal static JiggleMod Instance;
         private readonly HashSet<int> _seen = new HashSet<int>();
         private readonly HashSet<string> _dumped = new HashSet<string>();
         private float _nextScan;
         private string _logPath;
         private bool _diag;
+        private int _errors;
 
         public override void OnInitializeMelon()
         {
-            var cat = MelonPreferences.CreateCategory("GangBeastsJiggleV2", "Gang Beasts Jiggle");
+            Instance = this;
+            var cat = MelonPreferences.CreateCategory("GangBeastsJiggleV3", "Gang Beasts Jiggle");
             Enabled = cat.CreateEntry("Enabled", true, "Wlacza / wylacza moda");
-            IncludePatterns = cat.CreateEntry("BonePatterns", "butt,hip,pelvis,ass,bum,rear,tail,spine",
-                "Fragmenty nazw kosci / obiektow (po przecinku), ktore maja sie trzasc");
-            ExcludePatterns = cat.CreateEntry("ExcludePatterns", "hand,arm,leg,foot,head,finger,eye,hat",
+            ForceBone = cat.CreateEntry("ForceBone", "",
+                "Opcjonalnie: dokladna nazwa (lub fragment) kosci, ktora ma byc 'pupa'. Puste = auto");
+            IncludePatterns = cat.CreateEntry("BonePatterns", "butt,ass,bum,pelvis,hips,hip",
+                "Kolejnosc szukania kosci wg nazwy (pierwszy pasujacy wzorzec wygrywa)");
+            ExcludePatterns = cat.CreateEntry("ExcludePatterns",
+                "leg,thigh,calf,knee,foot,toe,arm,hand,finger,head,neck,eye,hat,shoulder",
                 "Pomijane fragmenty nazw");
-            Mode = cat.CreateEntry("Mode", "Both", "Scale, Position albo Both");
+            BaseScale = cat.CreateEntry("BaseScale", 1.7f, "Staly rozmiar pupy (1 = bez zmian, wiecej = wieksza)");
+            JiggleScale = cat.CreateEntry("JiggleScale", 0.5f, "Jak mocno pupa pulsuje podczas drgan");
+            PositionJiggle = cat.CreateEntry("PositionJiggle", 0.3f, "Jak mocno pupa sie przesuwa (0 = wylaczone)");
             Stiffness = cat.CreateEntry("Stiffness", 70f, "Sztywnosc sprezyny");
             Damping = cat.CreateEntry("Damping", 4f, "Tlumienie");
-            Amplitude = cat.CreateEntry("Amplitude", 0.8f, "Sila efektu");
             Reaction = cat.CreateEntry("Reaction", 1.0f, "Reakcja na ruch postaci");
-            MaxOffset = cat.CreateEntry("MaxOffset", 1.0f, "Maksymalne wychylenie");
+            MaxOffset = cat.CreateEntry("MaxOffset", 1.0f, "Maksymalne wychylenie sprezyny");
             try
             {
                 _logPath = Path.Combine(Directory.GetParent(Application.dataPath).FullName, "GangBeastsJiggle_log.txt");
-                File.WriteAllText(_logPath, "Gang Beasts Jiggle 1.2.0\r\n");
+                File.WriteAllText(_logPath, "Gang Beasts Jiggle 2.0.0\r\n");
             }
             catch { _logPath = null; }
-            Log("Zaladowany. Ten plik: " + _logPath);
+            Log("Zaladowany. Log: " + _logPath);
         }
 
         internal void Log(string msg)
@@ -58,12 +67,17 @@ namespace GangBeastsJiggle
             try { File.AppendAllText(_logPath, msg + "\r\n"); } catch { }
         }
 
+        internal void Fail(string where, Exception e)
+        {
+            if (_errors++ < 10) Log("BLAD (" + where + "): " + e);
+        }
+
         public override void OnUpdate()
         {
             if (!Enabled.Value || Time.unscaledTime < _nextScan) return;
             _nextScan = Time.unscaledTime + 2f;
             try { Scan(); }
-            catch (Exception e) { Log("Scan error: " + e); }
+            catch (Exception e) { Fail("Scan", e); }
         }
 
         private static string[] Split(string s)
@@ -71,19 +85,78 @@ namespace GangBeastsJiggle
             return s.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
         }
 
-        private static bool Matches(string name, string[] pats)
+        private static bool Has(string name, string pat)
         {
-            string n = name.ToLowerInvariant();
-            for (int i = 0; i < pats.Length; i++)
-                if (n.Contains(pats[i].Trim().ToLowerInvariant())) return true;
+            return name.IndexOf(pat.Trim(), StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static bool Excluded(string name, string[] exc)
+        {
+            for (int i = 0; i < exc.Length; i++) if (Has(name, exc[i])) return true;
             return false;
         }
 
-        private void Attach(Transform t, string why)
+        // Wybiera JEDNA kosc "pupy" dla szkieletu.
+        private Transform PickBone(Transform[] bones, string[] inc, string[] exc, out string how)
         {
-            if (t == null || !_seen.Add(t.GetInstanceID())) return;
-            t.gameObject.AddComponent<JiggleBone>();
-            Log("Jiggle dodany: " + t.name + " (" + why + ")");
+            how = "";
+            string force = ForceBone.Value;
+            if (!string.IsNullOrEmpty(force) && force.Trim().Length > 0)
+            {
+                foreach (Transform b in bones)
+                    if (b != null && Has(b.name, force)) { how = "ForceBone"; return b; }
+            }
+
+            for (int p = 0; p < inc.Length; p++)
+            {
+                foreach (Transform b in bones)
+                {
+                    if (b == null || Excluded(b.name, exc)) continue;
+                    if (Has(b.name, inc[p])) { how = "nazwa '" + inc[p].Trim() + "'"; return b; }
+                }
+            }
+
+            if (bones.Length < 8) return null;
+
+            // zapas: miednica = pierwsza kosc, w ktorej szkielet sie rozgalezia (kregoslup + nogi)
+            var set = new HashSet<Transform>();
+            foreach (Transform b in bones) if (b != null) set.Add(b);
+
+            Transform root = null; int bestCount = -1;
+            foreach (Transform b in bones)
+            {
+                if (b == null) continue;
+                if (b.parent != null && set.Contains(b.parent)) continue;
+                int cnt = CountDesc(b, set);
+                if (cnt > bestCount) { bestCount = cnt; root = b; }
+            }
+            if (root == null) return null;
+
+            Transform cur = root;
+            for (int guard = 0; guard < 20; guard++)
+            {
+                var kids = new List<Transform>();
+                for (int i = 0; i < cur.childCount; i++)
+                {
+                    Transform c = cur.GetChild(i);
+                    if (set.Contains(c) && CountDesc(c, set) >= 0) kids.Add(c);
+                }
+                if (kids.Count >= 2 || kids.Count == 0) break;
+                cur = kids[0];
+            }
+            how = "rozgalezienie szkieletu";
+            return cur;
+        }
+
+        private static int CountDesc(Transform t, HashSet<Transform> set)
+        {
+            int n = 0;
+            for (int i = 0; i < t.childCount; i++)
+            {
+                Transform c = t.GetChild(i);
+                if (set.Contains(c)) n += 1 + CountDesc(c, set);
+            }
+            return n;
         }
 
         private void Scan()
@@ -91,15 +164,11 @@ namespace GangBeastsJiggle
             string[] inc = Split(IncludePatterns.Value);
             string[] exc = Split(ExcludePatterns.Value);
             SkinnedMeshRenderer[] meshes = UnityEngine.Object.FindObjectsOfType<SkinnedMeshRenderer>();
-            Rigidbody[] bodies = UnityEngine.Object.FindObjectsOfType<Rigidbody>();
 
-            if (!_diag && (meshes.Length > 0 || bodies.Length > 0))
+            if (!_diag && meshes.Length > 0)
             {
                 _diag = true;
-                var sb = new StringBuilder();
-                sb.Append("DIAG: SkinnedMeshRenderer=" + meshes.Length + ", Rigidbody=" + bodies.Length + ". Rigidbody: ");
-                for (int i = 0; i < bodies.Length && i < 60; i++) sb.Append(bodies[i].name + ", ");
-                Log(sb.ToString());
+                Log("DIAG: SkinnedMeshRenderer w scenie = " + meshes.Length);
             }
 
             foreach (SkinnedMeshRenderer smr in meshes)
@@ -115,45 +184,32 @@ namespace GangBeastsJiggle
                     Log("Mesh '" + smr.name + "' kosci (" + bones.Length + "): " + string.Join(", ", names.ToArray()));
                 }
 
-                bool any = false;
-                foreach (Transform bone in bones)
+                string how;
+                Transform pick = PickBone(bones, inc, exc, out how);
+                if (pick == null || !_seen.Add(pick.GetInstanceID())) continue;
+                try
                 {
-                    if (bone == null) continue;
-                    if (!Matches(bone.name, inc) || Matches(bone.name, exc)) continue;
-                    Attach(bone, "kosc z mesh " + smr.name);
-                    any = true;
+                    pick.gameObject.AddComponent<JiggleBone>();
+                    Log("Jiggle dodany do kosci '" + pick.name + "' (" + how + ", mesh " + smr.name + ", dzieci: " + pick.childCount + ")");
                 }
-
-                // zapas: gdy zadna nazwa nie pasuje, uzyj korzenia szkieletu (miednica)
-                if (!any && bones.Length >= 8)
-                {
-                    var set = new HashSet<Transform>(bones);
-                    foreach (Transform bone in bones)
-                    {
-                        if (bone == null) continue;
-                        if (bone.parent == null || !set.Contains(bone.parent))
-                        {
-                            Attach(bone, "korzen szkieletu, mesh " + smr.name);
-                            break;
-                        }
-                    }
-                }
-            }
-
-            foreach (Rigidbody rb in bodies)
-            {
-                if (rb == null) continue;
-                if (Matches(rb.name, inc) && !Matches(rb.name, exc))
-                    Attach(rb.transform, "rigidbody");
+                catch (Exception e) { Fail("AddComponent", e); }
             }
         }
     }
 
-    /// <summary>Sprezyna na kosci - efekt tylko wizualny, nie rusza fizyki.</summary>
+    /// <summary>
+    /// Powieksza kosc (pupa) i wprawia ja w sprezyste drgania. Dzieci kosci (nogi, kregoslup) sa
+    /// kompensowane, wiec rosnie tylko okolica miednicy. Efekt trwa tylko do konca klatki.
+    /// </summary>
     public class JiggleBone : MonoBehaviour
     {
-        private Vector3 _lastPos, _lastVel, _offset, _springVel, _origScale, _origLocalPos;
-        private bool _applied, _init;
+        private Vector3 _lastPos, _lastVel, _offset, _springVel;
+        private Vector3 _origLocalScale, _origLocalPos;
+        private Transform[] _kids = new Transform[0];
+        private Vector3[] _kidWorldPos = new Vector3[0];
+        private Vector3[] _kidLocalPos = new Vector3[0];
+        private Vector3[] _kidLocalScale = new Vector3[0];
+        private bool _applied, _init, _dead;
 
         private void OnEnable()
         {
@@ -166,25 +222,46 @@ namespace GangBeastsJiggle
             while (true)
             {
                 yield return wait;
-                if (_applied)
-                {
-                    transform.localScale = _origScale;
-                    transform.localPosition = _origLocalPos;
-                    _applied = false;
-                }
+                Restore();
+            }
+        }
+
+        private void Restore()
+        {
+            if (!_applied) return;
+            _applied = false;
+            transform.localScale = _origLocalScale;
+            transform.localPosition = _origLocalPos;
+            for (int i = 0; i < _kids.Length; i++)
+            {
+                if (_kids[i] == null) continue;
+                _kids[i].localPosition = _kidLocalPos[i];
+                _kids[i].localScale = _kidLocalScale[i];
             }
         }
 
         private void LateUpdate()
         {
-            if (!JiggleMod.Enabled.Value) return;
+            if (_dead || !JiggleMod.Enabled.Value) return;
+            try { Step(); }
+            catch (Exception e)
+            {
+                _dead = true;
+                Restore();
+                JiggleMod.Instance.Fail("JiggleBone", e);
+            }
+        }
+
+        private void Step()
+        {
             float rawDt = Time.deltaTime;
             if (rawDt <= 0f) return;
             float dt = Mathf.Min(rawDt, 0.05f);
 
+            Restore(); // gdyby koniec klatki nie zdazyl
+
             Vector3 pos = transform.position;
             if (!_init) { _lastPos = pos; _lastVel = Vector3.zero; _init = true; }
-
             Vector3 vel = (pos - _lastPos) / rawDt;
             Vector3 acc = (vel - _lastVel) / rawDt;
             _lastPos = pos; _lastVel = vel;
@@ -194,36 +271,49 @@ namespace GangBeastsJiggle
             Vector3 force = -acc * 0.01f * JiggleMod.Reaction.Value - k * _offset - c * _springVel;
             _springVel += force * dt;
             _offset += _springVel * dt;
-            float max = JiggleMod.MaxOffset.Value;
+            float max = Mathf.Max(0.01f, JiggleMod.MaxOffset.Value);
             if (_offset.magnitude > max) _offset = _offset.normalized * max;
+            if (float.IsNaN(_offset.x) || float.IsNaN(_offset.y) || float.IsNaN(_offset.z))
+            {
+                _offset = Vector3.zero; _springVel = Vector3.zero; return;
+            }
 
-            if (_applied) return;
-            _origScale = transform.localScale;
+            // zapamietaj stan dzieci
+            int n = transform.childCount;
+            if (_kids.Length != n)
+            {
+                _kids = new Transform[n];
+                _kidWorldPos = new Vector3[n];
+                _kidLocalPos = new Vector3[n];
+                _kidLocalScale = new Vector3[n];
+            }
+            for (int i = 0; i < n; i++)
+            {
+                Transform ch = transform.GetChild(i);
+                _kids[i] = ch;
+                _kidWorldPos[i] = ch.position;
+                _kidLocalPos[i] = ch.localPosition;
+                _kidLocalScale[i] = ch.localScale;
+            }
+            _origLocalScale = transform.localScale;
             _origLocalPos = transform.localPosition;
 
-            string mode = JiggleMod.Mode.Value;
-            float amp = JiggleMod.Amplitude.Value;
-            if (mode == "Scale" || mode == "Both")
+            float s = Mathf.Max(0.1f, JiggleMod.BaseScale.Value + JiggleMod.JiggleScale.Value * _offset.magnitude);
+            transform.localScale = _origLocalScale * s;
+            transform.position = pos + _offset * JiggleMod.PositionJiggle.Value;
+
+            for (int i = 0; i < _kids.Length; i++)
             {
-                Vector3 l = transform.InverseTransformDirection(_offset);
-                transform.localScale = new Vector3(
-                    _origScale.x * (1f + Mathf.Abs(l.x) * amp),
-                    _origScale.y * (1f + Mathf.Abs(l.y) * amp),
-                    _origScale.z * (1f + Mathf.Abs(l.z) * amp));
+                if (_kids[i] == null) continue;
+                _kids[i].position = _kidWorldPos[i];
+                _kids[i].localScale = _kidLocalScale[i] / s;
             }
-            if (mode == "Position" || mode == "Both")
-                transform.position = transform.position + _offset * amp;
             _applied = true;
         }
 
         private void OnDisable()
         {
-            if (_applied)
-            {
-                transform.localScale = _origScale;
-                transform.localPosition = _origLocalPos;
-                _applied = false;
-            }
+            Restore();
         }
     }
 }
