@@ -1,10 +1,12 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
+using System.Text;
 using MelonLoader;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(GangBeastsJiggle.JiggleMod), "Gang Beasts Jiggle", "1.1.0", "xksunix")]
+[assembly: MelonInfo(typeof(GangBeastsJiggle.JiggleMod), "Gang Beasts Jiggle", "1.2.0", "xksunix")]
 
 namespace GangBeastsJiggle
 {
@@ -19,28 +21,41 @@ namespace GangBeastsJiggle
         internal static MelonPreferences_Entry<float> Amplitude;
         internal static MelonPreferences_Entry<float> Reaction;
         internal static MelonPreferences_Entry<float> MaxOffset;
-        internal static MelonPreferences_Entry<bool> DumpBones;
 
         private readonly HashSet<int> _seen = new HashSet<int>();
         private readonly HashSet<string> _dumped = new HashSet<string>();
         private float _nextScan;
+        private string _logPath;
+        private bool _diag;
 
         public override void OnInitializeMelon()
         {
-            var cat = MelonPreferences.CreateCategory("GangBeastsJiggle", "Gang Beasts Jiggle");
+            var cat = MelonPreferences.CreateCategory("GangBeastsJiggleV2", "Gang Beasts Jiggle");
             Enabled = cat.CreateEntry("Enabled", true, "Wlacza / wylacza moda");
-            IncludePatterns = cat.CreateEntry("BonePatterns", "butt,hip,pelvis,ass",
-                "Fragmenty nazw kosci (po przecinku), ktore maja sie trzasc");
-            ExcludePatterns = cat.CreateEntry("ExcludePatterns", "hand,arm,leg,foot,head,finger",
-                "Kosci z tymi fragmentami w nazwie sa pomijane");
-            Mode = cat.CreateEntry("Mode", "Scale", "Scale, Position albo Both");
-            Stiffness = cat.CreateEntry("Stiffness", 90f, "Sztywnosc sprezyny");
-            Damping = cat.CreateEntry("Damping", 5f, "Tlumienie");
-            Amplitude = cat.CreateEntry("Amplitude", 0.25f, "Sila efektu");
-            Reaction = cat.CreateEntry("Reaction", 0.6f, "Reakcja na ruch postaci");
+            IncludePatterns = cat.CreateEntry("BonePatterns", "butt,hip,pelvis,ass,bum,rear,tail,spine",
+                "Fragmenty nazw kosci / obiektow (po przecinku), ktore maja sie trzasc");
+            ExcludePatterns = cat.CreateEntry("ExcludePatterns", "hand,arm,leg,foot,head,finger,eye,hat",
+                "Pomijane fragmenty nazw");
+            Mode = cat.CreateEntry("Mode", "Both", "Scale, Position albo Both");
+            Stiffness = cat.CreateEntry("Stiffness", 70f, "Sztywnosc sprezyny");
+            Damping = cat.CreateEntry("Damping", 4f, "Tlumienie");
+            Amplitude = cat.CreateEntry("Amplitude", 0.8f, "Sila efektu");
+            Reaction = cat.CreateEntry("Reaction", 1.0f, "Reakcja na ruch postaci");
             MaxOffset = cat.CreateEntry("MaxOffset", 1.0f, "Maksymalne wychylenie");
-            DumpBones = cat.CreateEntry("DumpBones", true, "Zapisuje liste kosci postaci do logu");
-            LoggerInstance.Msg("Gang Beasts Jiggle zaladowany.");
+            try
+            {
+                _logPath = Path.Combine(Directory.GetParent(Application.dataPath).FullName, "GangBeastsJiggle_log.txt");
+                File.WriteAllText(_logPath, "Gang Beasts Jiggle 1.2.0\r\n");
+            }
+            catch { _logPath = null; }
+            Log("Zaladowany. Ten plik: " + _logPath);
+        }
+
+        internal void Log(string msg)
+        {
+            LoggerInstance.Msg(msg);
+            if (_logPath == null) return;
+            try { File.AppendAllText(_logPath, msg + "\r\n"); } catch { }
         }
 
         public override void OnUpdate()
@@ -48,7 +63,7 @@ namespace GangBeastsJiggle
             if (!Enabled.Value || Time.unscaledTime < _nextScan) return;
             _nextScan = Time.unscaledTime + 2f;
             try { Scan(); }
-            catch (Exception e) { LoggerInstance.Error("Scan error: " + e); }
+            catch (Exception e) { Log("Scan error: " + e); }
         }
 
         private static string[] Split(string s)
@@ -64,35 +79,72 @@ namespace GangBeastsJiggle
             return false;
         }
 
+        private void Attach(Transform t, string why)
+        {
+            if (t == null || !_seen.Add(t.GetInstanceID())) return;
+            t.gameObject.AddComponent<JiggleBone>();
+            Log("Jiggle dodany: " + t.name + " (" + why + ")");
+        }
+
         private void Scan()
         {
             string[] inc = Split(IncludePatterns.Value);
             string[] exc = Split(ExcludePatterns.Value);
             SkinnedMeshRenderer[] meshes = UnityEngine.Object.FindObjectsOfType<SkinnedMeshRenderer>();
+            Rigidbody[] bodies = UnityEngine.Object.FindObjectsOfType<Rigidbody>();
+
+            if (!_diag && (meshes.Length > 0 || bodies.Length > 0))
+            {
+                _diag = true;
+                var sb = new StringBuilder();
+                sb.Append("DIAG: SkinnedMeshRenderer=" + meshes.Length + ", Rigidbody=" + bodies.Length + ". Rigidbody: ");
+                for (int i = 0; i < bodies.Length && i < 60; i++) sb.Append(bodies[i].name + ", ");
+                Log(sb.ToString());
+            }
+
             foreach (SkinnedMeshRenderer smr in meshes)
             {
                 Transform[] bones = smr.bones;
                 if (bones == null || bones.Length < 3) continue;
 
-                if (DumpBones.Value)
+                string key = smr.name + ":" + bones.Length;
+                if (_dumped.Add(key))
                 {
-                    string key = smr.name + ":" + bones.Length;
-                    if (_dumped.Add(key))
-                    {
-                        var names = new List<string>();
-                        foreach (Transform b in bones) if (b != null) names.Add(b.name);
-                        LoggerInstance.Msg("Mesh '" + smr.name + "' kosci (" + bones.Length + "): " + string.Join(", ", names.ToArray()));
-                    }
+                    var names = new List<string>();
+                    foreach (Transform b in bones) if (b != null) names.Add(b.name);
+                    Log("Mesh '" + smr.name + "' kosci (" + bones.Length + "): " + string.Join(", ", names.ToArray()));
                 }
 
+                bool any = false;
                 foreach (Transform bone in bones)
                 {
                     if (bone == null) continue;
                     if (!Matches(bone.name, inc) || Matches(bone.name, exc)) continue;
-                    if (!_seen.Add(bone.GetInstanceID())) continue;
-                    bone.gameObject.AddComponent<JiggleBone>();
-                    LoggerInstance.Msg("Jiggle dodany do kosci: " + bone.name + " (mesh " + smr.name + ")");
+                    Attach(bone, "kosc z mesh " + smr.name);
+                    any = true;
                 }
+
+                // zapas: gdy zadna nazwa nie pasuje, uzyj korzenia szkieletu (miednica)
+                if (!any && bones.Length >= 8)
+                {
+                    var set = new HashSet<Transform>(bones);
+                    foreach (Transform bone in bones)
+                    {
+                        if (bone == null) continue;
+                        if (bone.parent == null || !set.Contains(bone.parent))
+                        {
+                            Attach(bone, "korzen szkieletu, mesh " + smr.name);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            foreach (Rigidbody rb in bodies)
+            {
+                if (rb == null) continue;
+                if (Matches(rb.name, inc) && !Matches(rb.name, exc))
+                    Attach(rb.transform, "rigidbody");
             }
         }
     }
