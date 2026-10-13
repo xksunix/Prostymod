@@ -5,7 +5,7 @@ using System.Reflection;
 using MelonLoader;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(GBFaces.FaceMod), "Gang Beasts Faces", "1.1.0", "Claude")]
+[assembly: MelonInfo(typeof(GBFaces.FaceMod), "Gang Beasts Faces", "1.2.0", "Claude")]
 
 namespace GBFaces
 {
@@ -13,9 +13,10 @@ namespace GBFaces
     // (tablice, listy, Type), idą przez refleksję w czasie dzialania.
     public class FaceMod : MelonMod
     {
+        internal static MelonPreferences_Entry<bool> PManual;  // true = osie ustawione recznie (F6/F7), false = automatyczna orientacja
         internal static MelonPreferences_Entry<int> PFwd;      // oś "przodu" twarzy w układzie głowy (0..5 = +X,-X,+Y,-Y,+Z,-Z)
         internal static MelonPreferences_Entry<int> PUp;       // oś "góry" twarzy
-        internal static MelonPreferences_Entry<float> PSize;   // wielkość twarzy
+        internal static MelonPreferences_Entry<float> PSize;   // mnoznik wielkosci twarzy (1.0 = tyle co glowa)
         internal static MelonPreferences_Entry<float> PPush;   // jak daleko od środka głowy (promień)
         internal static MelonPreferences_Entry<float> PMouthY; // wysokość ust
         internal static MelonPreferences_Entry<float> PBrowY;  // wysokość brwi
@@ -25,6 +26,11 @@ namespace GBFaces
         {
             Vector3.right, Vector3.left, Vector3.up, Vector3.down, Vector3.forward, Vector3.back
         };
+
+        // Orientacja wyliczona automatycznie z pozycji kosci (ustawiana przez FaceController)
+        internal static int AutoFwd = -1, AutoUp = -1;
+        internal static int EffFwd { get { return (PManual.Value || AutoFwd < 0) ? PFwd.Value : AutoFwd; } }
+        internal static int EffUp { get { return (PManual.Value || AutoUp < 0) ? PUp.Value : AutoUp; } }
 
         private readonly Dictionary<int, FaceController> faces = new Dictionary<int, FaceController>();
         private Type actorType;
@@ -38,15 +44,16 @@ namespace GBFaces
 
         public override void OnApplicationStart()
         {
-            var cat = MelonPreferences.CreateCategory("GBFaces", "Gang Beasts Faces");
+            var cat = MelonPreferences.CreateCategory("GBFaces2", "Gang Beasts Faces");
+            PManual = cat.CreateEntry("ManualOrientation", false);
             PFwd = cat.CreateEntry("ForwardAxis", 4);
             PUp = cat.CreateEntry("UpAxis", 2);
-            PSize = cat.CreateEntry("Size", 0.4f);
-            PPush = cat.CreateEntry("Push", 0.5f);
+            PSize = cat.CreateEntry("SizeMultiplier", 1.0f);
+            PPush = cat.CreateEntry("Push", 0.52f);
             PMouthY = cat.CreateEntry("MouthY", -0.2f);
             PBrowY = cat.CreateEntry("BrowY", 0.12f);
             PBrowX = cat.CreateEntry("BrowX", 0.17f);
-            LoggerInstance.Msg("Gang Beasts Faces 1.1 (IL2CPP) zaladowany. Klawisze: F6/F7 obrot twarzy, F8/F9 rozmiar, PgUp/PgDn usta, Ins/Del brwi, Home/End glebokosc, F10 reset.");
+            LoggerInstance.Msg("Gang Beasts Faces 1.2 (IL2CPP) zaladowany. Klawisze: F6/F7 obrot twarzy, F8/F9 rozmiar, PgUp/PgDn usta, Ins/Del brwi, Home/End glebokosc, F10 reset, F11 przekalibruj.");
         }
 
         public override void OnSceneWasLoaded(int buildIndex, string sceneName)
@@ -254,30 +261,56 @@ namespace GBFaces
             catch { return false; }
         }
 
+        // Przejscie w tryb reczny: zaczynamy od tego, co wyliczyla automatyka
+        private static void EnterManual()
+        {
+            if (PManual.Value) return;
+            int f = EffFwd, u = EffUp;
+            PFwd.Value = f;
+            PUp.Value = u;
+            PManual.Value = true;
+        }
+
         private void HandleKeys()
         {
             bool changed = false;
 
-            if (Key(KeyCode.F6)) { PFwd.Value = (PFwd.Value + 1) % 6; if (PUp.Value / 2 == PFwd.Value / 2) PUp.Value = NextUp(PFwd.Value, PUp.Value); changed = true; }
-            if (Key(KeyCode.F7)) { PUp.Value = NextUp(PFwd.Value, PUp.Value); changed = true; }
-            if (Key(KeyCode.F8)) { PSize.Value = Mathf.Max(0.05f, PSize.Value * 0.9f); changed = true; }
-            if (Key(KeyCode.F9)) { PSize.Value = Mathf.Min(3f, PSize.Value * 1.1f); changed = true; }
+            if (Key(KeyCode.F6))
+            {
+                EnterManual();
+                PFwd.Value = (PFwd.Value + 1) % 6;
+                if (PUp.Value / 2 == PFwd.Value / 2) PUp.Value = NextUp(PFwd.Value, PUp.Value);
+                changed = true;
+            }
+            if (Key(KeyCode.F7)) { EnterManual(); PUp.Value = NextUp(PFwd.Value, PUp.Value); changed = true; }
+            if (Key(KeyCode.F8)) { PSize.Value = Mathf.Max(0.1f, PSize.Value * 0.9f); changed = true; }
+            if (Key(KeyCode.F9)) { PSize.Value = Mathf.Min(5f, PSize.Value * 1.1f); changed = true; }
             if (Key(KeyCode.PageUp)) { PMouthY.Value += 0.02f; changed = true; }
             if (Key(KeyCode.PageDown)) { PMouthY.Value -= 0.02f; changed = true; }
             if (Key(KeyCode.Insert)) { PBrowY.Value += 0.02f; changed = true; }
             if (Key(KeyCode.Delete)) { PBrowY.Value -= 0.02f; changed = true; }
             if (Key(KeyCode.Home)) { PPush.Value += 0.02f; changed = true; }
             if (Key(KeyCode.End)) { PPush.Value = Mathf.Max(0.1f, PPush.Value - 0.02f); changed = true; }
+            if (Key(KeyCode.F11))
+            {
+                // ponowna automatyczna kalibracja (postac powinna stac prosto)
+                PManual.Value = false;
+                AutoFwd = -1; AutoUp = -1;
+                LoggerInstance.Msg("Kalibracja orientacji twarzy od nowa.");
+                changed = true;
+            }
             if (Key(KeyCode.F10))
             {
-                PFwd.Value = 4; PUp.Value = 2; PSize.Value = 0.4f; PPush.Value = 0.5f;
+                PManual.Value = false; AutoFwd = -1; AutoUp = -1;
+                PFwd.Value = 4; PUp.Value = 2; PSize.Value = 1.0f; PPush.Value = 0.52f;
                 PMouthY.Value = -0.2f; PBrowY.Value = 0.12f; PBrowX.Value = 0.17f;
                 changed = true;
             }
 
             if (changed)
             {
-                LoggerInstance.Msg("Twarz: przod=" + PFwd.Value + " gora=" + PUp.Value + " rozmiar=" + PSize.Value.ToString("0.00")
+                LoggerInstance.Msg("Twarz: " + (PManual.Value ? "reczna" : "auto") + " przod=" + EffFwd + " gora=" + EffUp
+                    + " rozmiar x" + PSize.Value.ToString("0.00")
                     + " usta=" + PMouthY.Value.ToString("0.00") + " brwi=" + PBrowY.Value.ToString("0.00")
                     + " glebokosc=" + PPush.Value.ToString("0.00"));
                 try { MelonPreferences.Save(); } catch { }

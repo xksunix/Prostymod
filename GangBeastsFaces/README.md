@@ -7,14 +7,14 @@ Wrzuć `GangBeastsFaces.dll` do folderu `Mods` w katalogu gry (`...\Gang Beasts\
 
 ## Reakcje
 - **Nokaut** – usta szeroko otwarte, brwi w górze
-- **Bicie / atak** – zaciśnięte usta, brwi opuszczone w złości
+- **Bicie / atak** – zaciśnięte usta, brwi opuszczone w złości (wykrywane po szybkim ruchu rąk)
 - **Upadek** – usta lekko otwarte, brwi uniesione
 - **Chwytanie / wspinanie** – wysiłek, lekko zmarszczone brwi
 - **Śmiech** – gdy ktoś inny dostanie nokaut, reszta się śmieje (usta ruszają się w rytm)
 - Normalnie – lekki uśmiech
 
 ## Ustawianie twarzy w grze
-Jeśli twarz jest w złym miejscu (z tyłu głowy, w środku, odwrócona), ustaw ją klawiszami:
+Mod sam wylicza orientację i rozmiar twarzy z kości postaci. Jeśli twarz jest w złym miejscu (z tyłu głowy, w środku, odwrócona), ustaw ją klawiszami (F6/F7 przełączają na tryb ręczny):
 
 | Klawisz | Działanie |
 |---|---|
@@ -24,6 +24,7 @@ Jeśli twarz jest w złym miejscu (z tyłu głowy, w środku, odwrócona), ustaw
 | PageUp / PageDown | usta wyżej / niżej |
 | Insert / Delete | brwi wyżej / niżej |
 | Home / End | twarz dalej od / bliżej środka głowy |
+| F11 | ponowna automatyczna kalibracja (postać powinna stać prosto) |
 | F10 | reset |
 
 Ustawienia zapisują się same (`UserData/MelonPreferences.cfg`, sekcja `GBFaces`).

@@ -27,6 +27,12 @@ namespace GBFaces
         private Renderer mouthR;
         private Renderer[] lipR = new Renderer[LipSegments];
 
+        private float headDiameter = 0.4f;
+        private Rigidbody rbL, rbR, rbChest;
+        private float punchHold;
+        private string lastState = "";
+        private static int stateLogCount;
+
         private float open, smile, angry, raise;
         private float time;
         private bool wasKnocked;
@@ -66,6 +72,8 @@ namespace GBFaces
                 try { fc.Destroy(); } catch { }
                 return null;
             }
+            try { fc.Measure(log); }
+            catch (Exception e) { log.Warning("Pomiar glowy/rak nie powiodl sie: " + e.Message); }
             if (isActor)
             {
                 try { fc.Reflect(log); }
@@ -132,6 +140,7 @@ namespace GBFaces
                     var sh = Shader.Find(n);
                     if (sh != null) { cachedShader = sh; break; }
                 }
+                MelonLogger.Msg("[Faces] shader twarzy: " + (cachedShader != null ? cachedShader.name : "(zaden nie znaleziony - uzywam domyslnego materialu)"));
             }
 
             Material m;
@@ -146,6 +155,84 @@ namespace GBFaces
                 m = r.material;     // domyslny material ksztaltu
                 m.color = c;
             }
+        }
+
+        // ---------- Pomiary: rozmiar glowy, rece (do wykrywania bicia), orientacja ----------
+
+        private static Transform FindByName(Transform start, string name)
+        {
+            var queue = new Queue<Transform>();
+            queue.Enqueue(start);
+            while (queue.Count > 0)
+            {
+                var t = queue.Dequeue();
+                if (t.name == name) return t;
+                for (int i = 0; i < t.childCount; i++) queue.Enqueue(t.GetChild(i));
+            }
+            return null;
+        }
+
+        private void Measure(MelonLogger.Instance log)
+        {
+            // rozmiar twarzy = srednica collidera glowy
+            var col = Head.GetComponent<Collider>();
+            if (col != null)
+            {
+                Vector3 size = col.bounds.size;
+                float d = Mathf.Max(size.x, Mathf.Max(size.y, size.z));
+                if (d > 0.05f && d < 3f) headDiameter = d;
+            }
+
+            if (!hasActorLogic) return;
+            Transform top = Actor.transform;
+
+            var chest = FindByName(top, "actor_chest_collider");
+            var lh = FindByName(top, "actor_leftHand_collider");
+            var rh = FindByName(top, "actor_rightHand_collider");
+            if (chest != null) rbChest = chest.GetComponent<Rigidbody>();
+            if (lh != null) rbL = lh.GetComponent<Rigidbody>();
+            if (rh != null) rbR = rh.GetComponent<Rigidbody>();
+
+            log.Msg("Srednica glowy: " + headDiameter.ToString("0.00") + ", rece: " + ((rbL != null && rbR != null) ? "ok" : "brak") + ", klatka: " + (rbChest != null ? "ok" : "brak"));
+
+            if (FaceMod.AutoFwd < 0 && !FaceMod.PManual.Value)
+                Calibrate(top, log);
+        }
+
+        // Orientacja twarzy z ukladu ciala: prawo = lewe ramie -> prawe ramie, gora = biodra -> glowa,
+        // przod = prawo x gora. Potem wybieramy osie lokalne glowy najblizsze tym kierunkom.
+        private void Calibrate(Transform top, MelonLogger.Instance log)
+        {
+            var la = FindByName(top, "actor_leftArm_collider");
+            var ra = FindByName(top, "actor_rightArm_collider");
+            var hips = FindByName(top, "actor_hips_collider");
+            if (la == null || ra == null || hips == null)
+            {
+                log.Warning("Auto-orientacja: nie znaleziono kosci ramion/bioder.");
+                return;
+            }
+            Vector3 right = ra.position - la.position;
+            Vector3 upv = Head.position - hips.position;
+            if (right.magnitude < 0.01f || upv.magnitude < 0.01f) return;
+            right.Normalize(); upv.Normalize();
+            Vector3 fwdv = Vector3.Cross(right, upv).normalized;
+
+            int bestF = 0; float bf = -2f;
+            for (int i = 0; i < 6; i++)
+            {
+                float d = Vector3.Dot(Head.TransformDirection(FaceMod.Axes[i]), fwdv);
+                if (d > bf) { bf = d; bestF = i; }
+            }
+            int bestU = 0; float bu = -2f;
+            for (int i = 0; i < 6; i++)
+            {
+                if (i / 2 == bestF / 2) continue;
+                float d = Vector3.Dot(Head.TransformDirection(FaceMod.Axes[i]), upv);
+                if (d > bu) { bu = d; bestU = i; }
+            }
+            FaceMod.AutoFwd = bestF;
+            FaceMod.AutoUp = bestU;
+            log.Msg("Auto-orientacja twarzy: przod=" + bestF + " (zgodnosc " + bf.ToString("0.00") + "), gora=" + bestU + " (zgodnosc " + bu.ToString("0.00") + "). Jesli twarz jest z tylu glowy, nacisnij F6.");
         }
 
         // ---------- Odczyt stanu postaci przez refleksje ----------
@@ -193,6 +280,29 @@ namespace GBFaces
                 foreach (var p in t.GetProperties(bf))
                     if (p.PropertyType.IsEnum) enums.Add(p.Name + ":" + p.PropertyType.Name);
                 log.Msg("Czlonki enum: " + string.Join(", ", enums.ToArray()));
+                try
+                {
+                    if (stateMember != null)
+                    {
+                        Type st = stateMember is PropertyInfo ? ((PropertyInfo)stateMember).PropertyType : ((FieldInfo)stateMember).FieldType;
+                        log.Msg("Wartosci " + st.Name + ": " + string.Join(", ", Enum.GetNames(st)));
+                    }
+                    var related = new List<string>();
+                    foreach (var ty in t.Assembly.GetTypes())
+                    {
+                        string n = ty.Name.ToLowerInvariant();
+                        if (n.Contains("punch") || n.Contains("grab") || n.Contains("fight") || n.Contains("attack") || n.Contains("hit") || n.Contains("knock") || n.Contains("damage"))
+                            related.Add(ty.Name);
+                        if (related.Count >= 40) break;
+                    }
+                    log.Msg("Typy zwiazane z walka: " + string.Join(", ", related.ToArray()));
+                    var objs = new List<string>();
+                    foreach (var p in t.GetProperties(bf))
+                        if (p.PropertyType.Namespace != null && p.PropertyType.Namespace.Contains("Femur")) objs.Add(p.Name + ":" + p.PropertyType.Name);
+                    if (objs.Count > 60) objs.RemoveRange(60, objs.Count - 60);
+                    log.Msg("Skladniki postaci: " + string.Join(", ", objs.ToArray()));
+                }
+                catch (Exception ex) { log.Warning("Dodatkowy zrzut typow nie powiodl sie: " + ex.Message); }
                 if (seen.Count > 80) seen.RemoveRange(80, seen.Count - 80);
                 log.Msg("Czlonki bool: " + string.Join(", ", seen.ToArray()));
             }
@@ -257,9 +367,30 @@ namespace GBFaces
                 if (v != null) state = v.ToString().ToLowerInvariant();
             }
 
+            if (state != lastState)
+            {
+                if (stateLogCount < 30)
+                {
+                    stateLogCount++;
+                    MelonLogger.Msg("[Faces] stan postaci: '" + lastState + "' -> '" + state + "'");
+                }
+                lastState = state;
+            }
+
             bool knocked = state.Contains("unconscious") || state.Contains("dead") || state.Contains("knock") || state == "ko";
             bool falling = state.Contains("fall") || state.Contains("ragdoll");
             bool fighting = hasActorLogic && AnyTrue(angerFlags, Actor);
+
+            // bicie: rece poruszaja sie szybko wzgledem klatki piersiowej
+            if (rbChest != null && (rbL != null || rbR != null))
+            {
+                Vector3 cv = rbChest.velocity;
+                float rel = 0f;
+                if (rbL != null) rel = Mathf.Max(rel, (rbL.velocity - cv).magnitude);
+                if (rbR != null) rel = Mathf.Max(rel, (rbR.velocity - cv).magnitude);
+                if (rel > 5f) punchHold = 0.6f;
+            }
+            if (punchHold > 0f) { punchHold -= dt; if (!falling) fighting = true; }
             bool straining = hasActorLogic && AnyTrue(strainFlags, Actor);
 
             float tOpen, tSmile, tAngry, tRaise;
@@ -311,14 +442,14 @@ namespace GBFaces
 
         private void Apply()
         {
-            int fwd = Mathf.Clamp(FaceMod.PFwd.Value, 0, 5);
-            int up = Mathf.Clamp(FaceMod.PUp.Value, 0, 5);
+            int fwd = Mathf.Clamp(FaceMod.EffFwd, 0, 5);
+            int up = Mathf.Clamp(FaceMod.EffUp, 0, 5);
             if (up / 2 == fwd / 2) up = (fwd + 2) % 6;
 
             var rt = root.transform;
             rt.localRotation = Quaternion.LookRotation(FaceMod.Axes[fwd], FaceMod.Axes[up]);
             float s = Mathf.Max(0.0001f, Head.lossyScale.x);
-            rt.localScale = Vector3.one * (FaceMod.PSize.Value / s);
+            rt.localScale = Vector3.one * (headDiameter * FaceMod.PSize.Value / s);
             rt.localPosition = Vector3.zero;
 
             float push = Mathf.Max(0.1f, FaceMod.PPush.Value);
