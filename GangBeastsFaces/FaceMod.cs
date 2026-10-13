@@ -1,16 +1,18 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
 using MelonLoader;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(GBFaces.FaceMod), "Gang Beasts Faces", "1.0.0", "Claude")]
+[assembly: MelonInfo(typeof(GBFaces.FaceMod), "Gang Beasts Faces", "1.1.0", "Claude")]
 
 namespace GBFaces
 {
+    // Wersja pod IL2CPP: wszystkie wywolania, ktore w IL2CPP maja inny podpis niz w zwyklym Unity
+    // (tablice, listy, Type), idą przez refleksję w czasie dzialania.
     public class FaceMod : MelonMod
     {
-        // Ustawienia (zapisują się w UserData/MelonPreferences.cfg)
         internal static MelonPreferences_Entry<int> PFwd;      // oś "przodu" twarzy w układzie głowy (0..5 = +X,-X,+Y,-Y,+Z,-Z)
         internal static MelonPreferences_Entry<int> PUp;       // oś "góry" twarzy
         internal static MelonPreferences_Entry<float> PSize;   // wielkość twarzy
@@ -30,6 +32,9 @@ namespace GBFaces
         private bool loggedNoActor;
         private float scanTimer;
         private static MethodInfo getKeyDown;
+        private static MethodInfo findObjectsMethod;
+        private static bool findObjectsResolved;
+        private static bool findObjectsNeedsBool;
 
         public override void OnApplicationStart()
         {
@@ -41,62 +46,80 @@ namespace GBFaces
             PMouthY = cat.CreateEntry("MouthY", -0.2f);
             PBrowY = cat.CreateEntry("BrowY", 0.12f);
             PBrowX = cat.CreateEntry("BrowX", 0.17f);
-            LoggerInstance.Msg("Gang Beasts Faces zaladowany. Klawisze: F6/F7 obrot twarzy, F8/F9 rozmiar, PgUp/PgDn usta, Ins/Del brwi, Home/End glebokosc, F10 reset.");
+            LoggerInstance.Msg("Gang Beasts Faces 1.1 (IL2CPP) zaladowany. Klawisze: F6/F7 obrot twarzy, F8/F9 rozmiar, PgUp/PgDn usta, Ins/Del brwi, Home/End glebokosc, F10 reset.");
         }
 
         public override void OnSceneWasLoaded(int buildIndex, string sceneName)
         {
+            foreach (var f in faces.Values)
+            {
+                try { f.Destroy(); } catch { }
+            }
             faces.Clear();
             scanTimer = 0f;
         }
 
         public override void OnUpdate()
         {
-            HandleKeys();
-
-            scanTimer -= Time.deltaTime;
-            if (scanTimer <= 0f)
+            try
             {
-                scanTimer = 1f;
-                Scan();
+                HandleKeys();
+
+                scanTimer -= Time.deltaTime;
+                if (scanTimer <= 0f)
+                {
+                    scanTimer = actorType != null ? 1f : 3f;
+                    Scan();
+                }
+
+                List<int> dead = null;
+                List<FaceController> justKnocked = null;
+                foreach (var kv in faces)
+                {
+                    var f = kv.Value;
+                    if (!f.IsAlive())
+                    {
+                        if (dead == null) dead = new List<int>();
+                        dead.Add(kv.Key);
+                        continue;
+                    }
+                    bool newKo = f.Tick(Time.deltaTime);
+                    if (newKo)
+                    {
+                        if (justKnocked == null) justKnocked = new List<FaceController>();
+                        justKnocked.Add(f);
+                    }
+                }
+                if (dead != null)
+                    foreach (var k in dead)
+                    {
+                        try { faces[k].Destroy(); } catch { }
+                        faces.Remove(k);
+                    }
+
+                // Gdy ktos dostaje nokaut, reszta sie smieje
+                if (justKnocked != null)
+                {
+                    foreach (var f in faces.Values)
+                    {
+                        if (justKnocked.Contains(f)) continue;
+                        if (UnityEngine.Random.value < 0.7f)
+                            f.Laugh = 2f + UnityEngine.Random.value * 1.5f;
+                    }
+                }
             }
-
-            List<int> dead = null;
-            List<FaceController> justKnocked = null;
-            foreach (var kv in faces)
+            catch (Exception e)
             {
-                var f = kv.Value;
-                if (!f.IsAlive())
+                if (!errorLogged)
                 {
-                    if (dead == null) dead = new List<int>();
-                    dead.Add(kv.Key);
-                    continue;
-                }
-                bool newKo = f.Tick(Time.deltaTime);
-                if (newKo)
-                {
-                    if (justKnocked == null) justKnocked = new List<FaceController>();
-                    justKnocked.Add(f);
-                }
-            }
-            if (dead != null)
-                foreach (var k in dead)
-                {
-                    faces[k].Destroy();
-                    faces.Remove(k);
-                }
-
-            // Gdy ktos dostaje nokaut, reszta sie smieje
-            if (justKnocked != null)
-            {
-                foreach (var f in faces.Values)
-                {
-                    if (justKnocked.Contains(f)) continue;
-                    if (UnityEngine.Random.value < 0.7f)
-                        f.Laugh = 2f + UnityEngine.Random.value * 1.5f;
+                    errorLogged = true;
+                    LoggerInstance.Error("Blad w OnUpdate (kolejne takie same pomijam): " + e);
                 }
             }
         }
+
+        private bool errorLogged;
+        private bool scanErrorLogged;
 
         private void Scan()
         {
@@ -107,22 +130,22 @@ namespace GBFaces
                     actorTypeSearched = true;
                     actorType = FindActorType();
                     if (actorType != null)
-                        LoggerInstance.Msg("Znaleziono typ postaci: " + actorType.FullName);
+                        LoggerInstance.Msg("Znaleziono typ postaci: " + actorType.FullName + " (" + actorType.Assembly.GetName().Name + ")");
                 }
 
-                UnityEngine.Object[] found;
+                List<UnityEngine.Object> found;
                 if (actorType != null)
                 {
-                    found = UnityEngine.Object.FindObjectsOfType(actorType);
+                    found = FindAll(actorType);
                 }
                 else
                 {
                     if (!loggedNoActor)
                     {
                         loggedNoActor = true;
-                        LoggerInstance.Warning("Nie znaleziono klasy 'Actor' - uzywam obiektow o nazwie 'Head'. Mimika bedzie ograniczona.");
+                        LoggerInstance.Warning("Nie znaleziono klasy 'Actor' - szukam obiektow o nazwie 'Head'. Mimika bedzie ograniczona.");
                     }
-                    found = UnityEngine.Object.FindObjectsOfType(typeof(Transform));
+                    found = FindAll(typeof(Transform));
                 }
 
                 foreach (var o in found)
@@ -140,17 +163,55 @@ namespace GBFaces
             }
             catch (Exception e)
             {
-                LoggerInstance.Error("Blad skanowania postaci: " + e);
+                if (!scanErrorLogged)
+                {
+                    scanErrorLogged = true;
+                    LoggerInstance.Error("Blad skanowania postaci (kolejne takie same pomijam): " + e);
+                }
             }
+        }
+
+        // FindObjectsOfType<T>() przez refleksje - w IL2CPP zwraca tablice Il2Cpp zamiast T[]
+        private static List<UnityEngine.Object> FindAll(Type t)
+        {
+            var result = new List<UnityEngine.Object>();
+            if (!findObjectsResolved)
+            {
+                findObjectsResolved = true;
+                MethodInfo noArgs = null, boolArg = null;
+                foreach (var m in typeof(UnityEngine.Object).GetMethods(BindingFlags.Public | BindingFlags.Static))
+                {
+                    if (m.Name != "FindObjectsOfType" || !m.IsGenericMethodDefinition) continue;
+                    var ps = m.GetParameters();
+                    if (ps.Length == 0) noArgs = m;
+                    else if (ps.Length == 1 && ps[0].ParameterType == typeof(bool)) boolArg = m;
+                }
+                findObjectsMethod = noArgs ?? boolArg;
+                findObjectsNeedsBool = noArgs == null && boolArg != null;
+            }
+            if (findObjectsMethod == null) return result;
+
+            var gm = findObjectsMethod.MakeGenericMethod(t);
+            object res = gm.Invoke(null, findObjectsNeedsBool ? new object[] { false } : null);
+            var en = res as IEnumerable;
+            if (en == null) return result;
+            foreach (var o in en)
+            {
+                var u = o as UnityEngine.Object;
+                if (u != null) result.Add(u);
+            }
+            return result;
         }
 
         private static Type FindActorType()
         {
+            Type best = null;
             foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
             {
                 string n = asm.GetName().Name;
                 if (n.StartsWith("UnityEngine") || n.StartsWith("System") || n.StartsWith("mscorlib")
-                    || n.StartsWith("MelonLoader") || n.StartsWith("Mono.") || n.StartsWith("0Harmony"))
+                    || n.StartsWith("MelonLoader") || n.StartsWith("Mono.") || n.StartsWith("0Harmony")
+                    || n.StartsWith("Il2CppInterop") || n.StartsWith("Il2Cppmscorlib") || n.StartsWith("Il2CppSystem"))
                     continue;
                 Type[] types;
                 try { types = asm.GetTypes(); }
@@ -159,10 +220,15 @@ namespace GBFaces
                 foreach (var t in types)
                 {
                     if (t == null) continue;
-                    if (t.Name == "Actor" && typeof(Component).IsAssignableFrom(t)) return t;
+                    if (t.Name != "Actor") continue;
+                    bool isComponent;
+                    try { isComponent = typeof(Component).IsAssignableFrom(t); } catch { continue; }
+                    if (!isComponent) continue;
+                    if (n.Contains("Assembly-CSharp")) return t;
+                    if (best == null) best = t;
                 }
             }
-            return null;
+            return best;
         }
 
         // ---------- Sterowanie ustawieniami w grze ----------
@@ -173,12 +239,17 @@ namespace GBFaces
             {
                 if (getKeyDown == null)
                 {
-                    var t = Type.GetType("UnityEngine.Input, UnityEngine.InputLegacyModule")
-                            ?? Type.GetType("UnityEngine.Input, UnityEngine.CoreModule")
-                            ?? Type.GetType("UnityEngine.Input, UnityEngine");
+                    Type t = null;
+                    foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                    {
+                        if (!asm.GetName().Name.StartsWith("UnityEngine")) continue;
+                        t = asm.GetType("UnityEngine.Input", false);
+                        if (t != null) break;
+                    }
                     if (t != null) getKeyDown = t.GetMethod("GetKeyDown", new[] { typeof(KeyCode) });
+                    if (getKeyDown == null) return false;
                 }
-                return getKeyDown != null && (bool)getKeyDown.Invoke(null, new object[] { k });
+                return (bool)getKeyDown.Invoke(null, new object[] { k });
             }
             catch { return false; }
         }

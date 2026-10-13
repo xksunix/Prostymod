@@ -1,4 +1,4 @@
-# Gang Beasts Faces (MelonLoader)
+# Gang Beasts Faces (MelonLoader, IL2CPP)
 
 Dodaje postaciom w Gang Beasts usta i czarne brwi, które reagują na to, co się dzieje.
 

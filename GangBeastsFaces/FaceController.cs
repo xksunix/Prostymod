@@ -8,17 +8,24 @@ using UnityEngine.Rendering;
 namespace GBFaces
 {
     // Twarz jednej postaci: usta + dwie brwi przyczepione do glowy.
+    // Zbudowana z wbudowanych ksztaltow Unity (kula, szescian) - bez wlasnych siatek,
+    // bo te w IL2CPP wymagaja tablic Il2Cpp.
     internal class FaceController
     {
+        private const int LipSegments = 9;
         private static bool dumped;
+        private static Shader cachedShader;
+        private static bool shaderSearched;
 
         public Component Actor;
         public Transform Head;
         public float Laugh;          // ile sekund jeszcze sie smieje
 
         private GameObject root;
-        private Mesh mouthM, lipM, browLM, browRM;
-        private Renderer mouthR, lipR;
+        private Transform mouth, browL, browR;
+        private Transform[] lip = new Transform[LipSegments];
+        private Renderer mouthR;
+        private Renderer[] lipR = new Renderer[LipSegments];
 
         private float open, smile, angry, raise;
         private float time;
@@ -28,8 +35,6 @@ namespace GBFaces
         private readonly List<MemberInfo> angerFlags = new List<MemberInfo>();
         private readonly List<MemberInfo> strainFlags = new List<MemberInfo>();
         private readonly bool hasActorLogic;
-
-        private static Material darkMat, blackMat;
 
         private FaceController(Component actor, Transform head, bool hasActorLogic)
         {
@@ -51,8 +56,21 @@ namespace GBFaces
             }
 
             var fc = new FaceController(actor, head, isActor);
-            fc.Build();
-            if (isActor) fc.Reflect(log);
+            try
+            {
+                fc.Build();
+            }
+            catch (Exception e)
+            {
+                log.Error("Nie udalo sie zbudowac twarzy: " + e);
+                try { fc.Destroy(); } catch { }
+                return null;
+            }
+            if (isActor)
+            {
+                try { fc.Reflect(log); }
+                catch (Exception e) { log.Warning("Nie udalo sie odczytac stanu postaci (twarz bedzie statyczna): " + e.Message); }
+            }
 
             log.Msg("Dodano twarz: " + actor.name + " -> " + Path(head));
             if (!dumped)
@@ -65,59 +83,69 @@ namespace GBFaces
 
         private void Build()
         {
-            if (darkMat == null) darkMat = MakeMaterial(new Color(0.12f, 0.01f, 0.03f));
-            if (blackMat == null) blackMat = MakeMaterial(new Color(0.02f, 0.02f, 0.02f));
-            darkMat.hideFlags = HideFlags.DontUnloadUnusedAsset;
-            blackMat.hideFlags = HideFlags.DontUnloadUnusedAsset;
-
             root = new GameObject("GBFace");
             root.transform.SetParent(Head, false);
             root.layer = Head.gameObject.layer;
 
-            mouthM = NewPart("Mouth", darkMat, out mouthR);
-            lipM = NewPart("Lip", blackMat, out lipR);
+            var dark = new Color(0.12f, 0.01f, 0.03f);
+            var black = new Color(0.02f, 0.02f, 0.02f);
+
+            mouth = Prim("Mouth", PrimitiveType.Sphere, dark, out mouthR);
+            for (int i = 0; i < LipSegments; i++)
+                lip[i] = Prim("Lip" + i, PrimitiveType.Sphere, black, out lipR[i]);
             Renderer tmp;
-            browLM = NewPart("BrowL", blackMat, out tmp);
-            browRM = NewPart("BrowR", blackMat, out tmp);
+            browL = Prim("BrowL", PrimitiveType.Cube, black, out tmp);
+            browR = Prim("BrowR", PrimitiveType.Cube, black, out tmp);
         }
 
-        private Mesh NewPart(string name, Material mat, out Renderer rend)
+        private Transform Prim(string name, PrimitiveType type, Color color, out Renderer rend)
         {
-            var go = new GameObject(name);
+            var go = GameObject.CreatePrimitive(type);
+            go.name = name;
+
+            // zadnych kolizji - twarz ma tylko wygladac
+            var col = go.GetComponent<Collider>();
+            if (col != null) UnityEngine.Object.DestroyImmediate(col);
+
             go.transform.SetParent(root.transform, false);
             go.layer = root.layer;
-            var mf = go.AddComponent<MeshFilter>();
-            var mr = go.AddComponent<MeshRenderer>();
-            mr.sharedMaterial = mat;
-            mr.shadowCastingMode = ShadowCastingMode.Off;
-            mr.receiveShadows = false;
-            var m = new Mesh();
-            m.name = name;
-            mf.sharedMesh = m;
-            rend = mr;
-            return m;
+
+            var r = go.GetComponent<Renderer>();
+            rend = r;
+            if (r != null)
+            {
+                r.shadowCastingMode = ShadowCastingMode.Off;
+                r.receiveShadows = false;
+                Colorize(r, color);
+            }
+            return go.transform;
         }
 
-        private static Material MakeMaterial(Color c)
+        private static void Colorize(Renderer r, Color c)
         {
-            string[] names = { "Unlit/Color", "Sprites/Default", "Standard", "Legacy Shaders/Diffuse", "Diffuse" };
-            foreach (var n in names)
+            if (!shaderSearched)
             {
-                var sh = Shader.Find(n);
-                if (sh == null) continue;
-                var m = new Material(sh);
-                m.color = c;
-                return m;
+                shaderSearched = true;
+                string[] names = { "Unlit/Color", "Sprites/Default", "Standard", "Legacy Shaders/Diffuse" };
+                foreach (var n in names)
+                {
+                    var sh = Shader.Find(n);
+                    if (sh != null) { cachedShader = sh; break; }
+                }
             }
-            // Ostatnia deska ratunku: material z jakiegos renderera w scenie
-            var any = UnityEngine.Object.FindObjectOfType(typeof(Renderer)) as Renderer;
-            if (any != null && any.sharedMaterial != null)
+
+            Material m;
+            if (cachedShader != null)
             {
-                var m = new Material(any.sharedMaterial);
+                m = new Material(cachedShader);
                 m.color = c;
-                return m;
+                r.sharedMaterial = m;
             }
-            return new Material(Shader.Find("Hidden/InternalErrorShader"));
+            else
+            {
+                m = r.material;     // domyslny material ksztaltu
+                m.color = c;
+            }
         }
 
         // ---------- Odczyt stanu postaci przez refleksje ----------
@@ -126,12 +154,22 @@ namespace GBFaces
         {
             const BindingFlags bf = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
             var t = Actor.GetType();
+            var seen = new List<string>();
 
             // stan postaci: najpierw "actorState", potem cokolwiek enumowego z "state" w nazwie
             foreach (var f in t.GetFields(bf))
                 if (string.Equals(f.Name, "actorState", StringComparison.OrdinalIgnoreCase)) stateMember = f;
             foreach (var p in t.GetProperties(bf))
-                if (stateMember == null && p.CanRead && string.Equals(p.Name, "actorState", StringComparison.OrdinalIgnoreCase)) stateMember = p;
+                if (stateMember == null && p.CanRead && p.GetIndexParameters().Length == 0
+                    && string.Equals(p.Name, "actorState", StringComparison.OrdinalIgnoreCase)) stateMember = p;
+            if (stateMember == null)
+            {
+                foreach (var p in t.GetProperties(bf))
+                {
+                    if (p.CanRead && p.GetIndexParameters().Length == 0 && p.PropertyType.IsEnum
+                        && p.Name.ToLowerInvariant().Contains("state")) { stateMember = p; break; }
+                }
+            }
             if (stateMember == null)
             {
                 foreach (var f in t.GetFields(bf))
@@ -139,13 +177,28 @@ namespace GBFaces
             }
 
             foreach (var f in t.GetFields(bf))
-                if (f.FieldType == typeof(bool)) ClassifyFlag(f, f.Name);
+                if (f.FieldType == typeof(bool)) { ClassifyFlag(f, f.Name); seen.Add(f.Name); }
             foreach (var p in t.GetProperties(bf))
-                if (p.PropertyType == typeof(bool) && p.CanRead && p.GetIndexParameters().Length == 0) ClassifyFlag(p, p.Name);
+                if (p.PropertyType == typeof(bool) && p.CanRead && p.GetIndexParameters().Length == 0)
+                { ClassifyFlag(p, p.Name); seen.Add(p.Name); }
 
             log.Msg("Stan postaci: " + (stateMember != null ? stateMember.Name : "(nie znaleziono)")
                 + ", flagi gniewu: " + angerFlags.Count + ", flagi wysilku: " + strainFlags.Count);
+
+            // jednorazowo: nazwy czlonkow typu bool/enum, zeby latwo dopasowac reakcje
+            if (!membersLogged)
+            {
+                membersLogged = true;
+                var enums = new List<string>();
+                foreach (var p in t.GetProperties(bf))
+                    if (p.PropertyType.IsEnum) enums.Add(p.Name + ":" + p.PropertyType.Name);
+                log.Msg("Czlonki enum: " + string.Join(", ", enums.ToArray()));
+                if (seen.Count > 80) seen.RemoveRange(80, seen.Count - 80);
+                log.Msg("Czlonki bool: " + string.Join(", ", seen.ToArray()));
+            }
         }
+
+        private static bool membersLogged;
 
         private void ClassifyFlag(MemberInfo m, string name)
         {
@@ -249,52 +302,66 @@ namespace GBFaces
             return newKo;
         }
 
+        // Pozycja na lekko wygietej "kuli" glowy: z maleje ku brzegom
+        private static Vector3 Pos(float x, float y, float push, float eps)
+        {
+            float z = push - (x * x + y * y) / (2f * push) + eps;
+            return new Vector3(x, y, z);
+        }
+
         private void Apply()
         {
             int fwd = Mathf.Clamp(FaceMod.PFwd.Value, 0, 5);
             int up = Mathf.Clamp(FaceMod.PUp.Value, 0, 5);
             if (up / 2 == fwd / 2) up = (fwd + 2) % 6;
 
-            root.transform.localRotation = Quaternion.LookRotation(FaceMod.Axes[fwd], FaceMod.Axes[up]);
+            var rt = root.transform;
+            rt.localRotation = Quaternion.LookRotation(FaceMod.Axes[fwd], FaceMod.Axes[up]);
             float s = Mathf.Max(0.0001f, Head.lossyScale.x);
-            root.transform.localScale = Vector3.one * (FaceMod.PSize.Value / s);
-            root.transform.localPosition = Vector3.zero;
+            rt.localScale = Vector3.one * (FaceMod.PSize.Value / s);
+            rt.localPosition = Vector3.zero;
 
-            float push = FaceMod.PPush.Value;
+            float push = Mathf.Max(0.1f, FaceMod.PPush.Value);
             float my = FaceMod.PMouthY.Value;
             float by = FaceMod.PBrowY.Value;
             float bx = FaceMod.PBrowX.Value;
 
-            // ----- usta -----
-            var b = new MeshBuilder(push);
+            // ----- usta (ciemna, splaszczona kula) -----
             float openH = open * 0.34f;
             float mouthW = 0.22f + 0.05f * Mathf.Max(0f, smile) + 0.04f * open;
-            bool showMouth = openH > 0.012f;
-            mouthR.enabled = showMouth;
+            bool showMouth = openH > 0.03f;
+            if (mouthR != null) mouthR.enabled = showMouth;
             if (showMouth)
             {
-                b.Ellipse(0f, my - openH * 0.2f, mouthW, openH * 0.5f, 0.004f);
-                b.ApplyTo(mouthM);
+                mouth.localPosition = Pos(0f, my - openH * 0.2f, push, 0.004f);
+                mouth.localRotation = Quaternion.identity;
+                mouth.localScale = new Vector3(mouthW * 2f, openH, 0.05f);
             }
 
-            // ----- warga / usmiech (rysowana, gdy usta zamkniete lub prawie) -----
-            lipR.enabled = open < 0.45f;
-            if (lipR.enabled)
+            // ----- warga / usmiech: luk z malych kulek (gdy usta zamkniete lub prawie) -----
+            bool showLip = open < 0.45f;
+            float curve = smile * 0.07f;
+            for (int i = 0; i < LipSegments; i++)
             {
-                var l = new MeshBuilder(push);
-                l.Arc(0f, my, mouthW, smile * 0.07f, 0.022f, 0.009f);
-                l.ApplyTo(lipM);
+                if (lipR[i] != null) lipR[i].enabled = showLip;
+                if (!showLip) continue;
+                float t = (float)i / (LipSegments - 1) * 2f - 1f;           // -1..1
+                float x = t * mouthW;
+                float y = my + curve * (t * t - 0.5f);
+                lip[i].localPosition = Pos(x, y, push, 0.009f);
+                lip[i].localRotation = Quaternion.identity;
+                lip[i].localScale = new Vector3(0.05f, 0.05f, 0.03f);
             }
 
-            // ----- brwi -----
+            // ----- brwi (cienkie czarne sześciany) -----
             float tiltDeg = angry * 24f - raise * 8f;
             float lift = raise * 0.06f - angry * 0.025f;
-            var br = new MeshBuilder(push);
-            br.Brow(bx, by + lift, 0.17f, 0.032f, tiltDeg, 0.009f);
-            br.ApplyTo(browRM);
-            var bl = new MeshBuilder(push);
-            bl.Brow(-bx, by + lift, 0.17f, 0.032f, -tiltDeg, 0.009f);
-            bl.ApplyTo(browLM);
+            browR.localPosition = Pos(bx, by + lift, push, 0.009f);
+            browR.localRotation = Quaternion.Euler(0f, 0f, tiltDeg);
+            browR.localScale = new Vector3(0.17f, 0.034f, 0.03f);
+            browL.localPosition = Pos(-bx, by + lift, push, 0.009f);
+            browL.localRotation = Quaternion.Euler(0f, 0f, -tiltDeg);
+            browL.localScale = new Vector3(0.17f, 0.034f, 0.03f);
         }
 
         // ---------- Pomocnicze ----------
@@ -347,101 +414,15 @@ namespace GBFaces
         private static void DumpRec(Transform t, int depth, MelonLogger.Instance log, int[] count)
         {
             if (count[0]++ > 80 || depth > 6) return;
-            string comps = "";
-            foreach (var c in t.GetComponents<Component>())
-                if (c != null) comps += c.GetType().Name + " ";
-            log.Msg(new string(' ', depth * 2) + t.name + "  [" + comps.Trim() + "]");
+            string flags = "";
+            try
+            {
+                if (t.GetComponent<Renderer>() != null) flags += " [Renderer]";
+                if (t.GetComponent<Rigidbody>() != null) flags += " [Rigidbody]";
+            }
+            catch { }
+            log.Msg(new string(' ', depth * 2) + t.name + flags);
             for (int i = 0; i < t.childCount; i++) DumpRec(t.GetChild(i), depth + 1, log, count);
-        }
-    }
-
-    // Prosty budowniarz siatek 2D owiniety lekko na kuli glowy (dwustronne trojkaty).
-    internal class MeshBuilder
-    {
-        private readonly List<Vector3> v = new List<Vector3>();
-        private readonly List<int> tr = new List<int>();
-        private readonly float push;
-
-        public MeshBuilder(float push)
-        {
-            this.push = Mathf.Max(0.1f, push);
-        }
-
-        private Vector3 P(float x, float y, float eps)
-        {
-            float z = push - (x * x + y * y) / (2f * push) + eps;
-            return new Vector3(x, y, z);
-        }
-
-        private int Vtx(float x, float y, float eps)
-        {
-            v.Add(P(x, y, eps));
-            return v.Count - 1;
-        }
-
-        private void Tri(int a, int b, int c)
-        {
-            tr.Add(a); tr.Add(b); tr.Add(c);
-            tr.Add(a); tr.Add(c); tr.Add(b);   // druga strona
-        }
-
-        public void Ellipse(float cx, float cy, float rx, float ry, float eps)
-        {
-            const int n = 24;
-            int c = Vtx(cx, cy, eps);
-            int first = v.Count;
-            for (int i = 0; i < n; i++)
-            {
-                float a = (float)i / n * Mathf.PI * 2f;
-                Vtx(cx + Mathf.Cos(a) * rx, cy + Mathf.Sin(a) * ry, eps);
-            }
-            for (int i = 0; i < n; i++)
-                Tri(c, first + i, first + (i + 1) % n);
-        }
-
-        // Luk: smile > 0 -> konce w gore (usmiech), < 0 -> konce w dol (grymas)
-        public void Arc(float cx, float cy, float halfW, float curve, float thick, float eps)
-        {
-            const int n = 12;
-            int prevTop = -1, prevBot = -1;
-            for (int i = 0; i <= n; i++)
-            {
-                float t = (float)i / n * 2f - 1f;           // -1..1
-                float x = cx + t * halfW;
-                float y = cy + curve * (t * t - 0.5f);
-                int top = Vtx(x, y + thick * 0.5f, eps);
-                int bot = Vtx(x, y - thick * 0.5f, eps);
-                if (prevTop >= 0)
-                {
-                    Tri(prevTop, prevBot, top);
-                    Tri(top, prevBot, bot);
-                }
-                prevTop = top; prevBot = bot;
-            }
-        }
-
-        // Brew: prostokat o dlugosci len, obrocony o angleDeg wokol srodka
-        public void Brow(float cx, float cy, float len, float thick, float angleDeg, float eps)
-        {
-            float a = angleDeg * Mathf.Deg2Rad;
-            float dx = Mathf.Cos(a), dy = Mathf.Sin(a);
-            float nx = -dy, ny = dx;
-            float hl = len * 0.5f, ht = thick * 0.5f;
-            int p0 = Vtx(cx - dx * hl - nx * ht, cy - dy * hl - ny * ht, eps);
-            int p1 = Vtx(cx + dx * hl - nx * ht, cy + dy * hl - ny * ht, eps);
-            int p2 = Vtx(cx + dx * hl + nx * ht, cy + dy * hl + ny * ht, eps);
-            int p3 = Vtx(cx - dx * hl + nx * ht, cy - dy * hl + ny * ht, eps);
-            Tri(p0, p1, p2);
-            Tri(p0, p2, p3);
-        }
-
-        public void ApplyTo(Mesh m)
-        {
-            m.Clear();
-            m.SetVertices(v);
-            m.SetTriangles(tr, 0);
-            m.RecalculateNormals();
-            m.RecalculateBounds();
         }
     }
 }
