@@ -1,0 +1,31 @@
+name: Build Gang Beasts Hunch
+on:
+  push:
+    paths:
+      - 'GangBeastsHunch/**'
+      - '.github/workflows/gangbeasts-hunch.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - run: dotnet build GangBeastsHunch/GangBeastsHunch.csproj -c Release -o out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GangBeastsHunch-dll
+          path: out/GangBeastsHunch.dll
+      - name: Commit DLL to dist/
+        run: |
+          mkdir -p dist
+          cp out/GangBeastsHunch.dll dist/GangBeastsHunch.dll
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add dist/GangBeastsHunch.dll
+          git commit -m "Build GangBeastsHunch.dll [skip ci]" || echo "no changes"
+          git push
