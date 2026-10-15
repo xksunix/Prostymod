@@ -5,7 +5,7 @@ using System.Reflection;
 using MelonLoader;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(GBFaces.FaceMod), "Gang Beasts Faces", "1.2.0", "Claude")]
+[assembly: MelonInfo(typeof(GBFaces.FaceMod), "Gang Beasts Faces", "1.3.0", "Claude")]
 
 namespace GBFaces
 {
@@ -21,6 +21,8 @@ namespace GBFaces
         internal static MelonPreferences_Entry<float> PMouthY; // wysokość ust
         internal static MelonPreferences_Entry<float> PBrowY;  // wysokość brwi
         internal static MelonPreferences_Entry<float> PBrowX;  // odstęp brwi od środka
+        internal static MelonPreferences_Entry<float> PFaceY;  // przesunięcie CAŁEJ twarzy w górę/dół (dodatnie = wyżej)
+        internal static MelonPreferences_Entry<float> PHitThr; // próg przyspieszenia, od którego postać robi minę "au!"
 
         internal static readonly Vector3[] Axes =
         {
@@ -53,7 +55,9 @@ namespace GBFaces
             PMouthY = cat.CreateEntry("MouthY", -0.2f);
             PBrowY = cat.CreateEntry("BrowY", 0.12f);
             PBrowX = cat.CreateEntry("BrowX", 0.17f);
-            LoggerInstance.Msg("Gang Beasts Faces 1.2 (IL2CPP) zaladowany. Klawisze: F6/F7 obrot twarzy, F8/F9 rozmiar, PgUp/PgDn usta, Ins/Del brwi, Home/End glebokosc, F10 reset, F11 przekalibruj.");
+            PFaceY = cat.CreateEntry("FaceY", 0.12f);
+            PHitThr = cat.CreateEntry("HitThreshold", 160f);
+            LoggerInstance.Msg("Gang Beasts Faces 1.3 (IL2CPP) zaladowany. Klawisze: F6/F7 obrot twarzy, F8/F9 rozmiar, Num+/Num- cala twarz gora/dol, PgUp/PgDn usta, Ins/Del brwi, Home/End glebokosc, F10 reset, F11 przekalibruj.");
         }
 
         public override void OnSceneWasLoaded(int buildIndex, string sceneName)
@@ -285,6 +289,8 @@ namespace GBFaces
             if (Key(KeyCode.F7)) { EnterManual(); PUp.Value = NextUp(PFwd.Value, PUp.Value); changed = true; }
             if (Key(KeyCode.F8)) { PSize.Value = Mathf.Max(0.1f, PSize.Value * 0.9f); changed = true; }
             if (Key(KeyCode.F9)) { PSize.Value = Mathf.Min(5f, PSize.Value * 1.1f); changed = true; }
+            if (Key(KeyCode.KeypadPlus)) { PFaceY.Value += 0.02f; changed = true; }
+            if (Key(KeyCode.KeypadMinus)) { PFaceY.Value -= 0.02f; changed = true; }
             if (Key(KeyCode.PageUp)) { PMouthY.Value += 0.02f; changed = true; }
             if (Key(KeyCode.PageDown)) { PMouthY.Value -= 0.02f; changed = true; }
             if (Key(KeyCode.Insert)) { PBrowY.Value += 0.02f; changed = true; }
@@ -304,6 +310,7 @@ namespace GBFaces
                 PManual.Value = false; AutoFwd = -1; AutoUp = -1;
                 PFwd.Value = 4; PUp.Value = 2; PSize.Value = 1.0f; PPush.Value = 0.52f;
                 PMouthY.Value = -0.2f; PBrowY.Value = 0.12f; PBrowX.Value = 0.17f;
+                PFaceY.Value = 0.12f;
                 changed = true;
             }
 
@@ -311,6 +318,7 @@ namespace GBFaces
             {
                 LoggerInstance.Msg("Twarz: " + (PManual.Value ? "reczna" : "auto") + " przod=" + EffFwd + " gora=" + EffUp
                     + " rozmiar x" + PSize.Value.ToString("0.00")
+                    + " wysokosc=" + PFaceY.Value.ToString("0.00")
                     + " usta=" + PMouthY.Value.ToString("0.00") + " brwi=" + PBrowY.Value.ToString("0.00")
                     + " glebokosc=" + PPush.Value.ToString("0.00"));
                 try { MelonPreferences.Save(); } catch { }
