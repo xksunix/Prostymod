@@ -2,10 +2,11 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using MelonLoader;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(GangBeastsPee.PeeMod), "Gang Beasts Pee", "1.0.0", "xksunix")]
+[assembly: MelonInfo(typeof(GangBeastsPee.PeeMod), "Gang Beasts Pee", "1.1.0", "xksunix")]
 
 namespace GangBeastsPee
 {
@@ -40,6 +41,7 @@ namespace GangBeastsPee
         private Material mat;
         private float nextScan;
         private bool inputBroken;
+        private bool wasHeld;
         private int errors;
         private readonly System.Random rng = new System.Random();
 
@@ -47,6 +49,43 @@ namespace GangBeastsPee
         private static bool findResolved;
         private static MethodInfo findMethod;
         private static bool findNeedsBool;
+
+        [DllImport("user32.dll")]
+        private static extern short GetAsyncKeyState(int vKey);
+
+        private static int ToVirtualKey(KeyCode k)
+        {
+            int c = (int)k;
+            if (c >= (int)KeyCode.A && c <= (int)KeyCode.Z) return 0x41 + (c - (int)KeyCode.A);
+            if (c >= (int)KeyCode.Alpha0 && c <= (int)KeyCode.Alpha9) return 0x30 + (c - (int)KeyCode.Alpha0);
+            if (c >= (int)KeyCode.F1 && c <= (int)KeyCode.F12) return 0x70 + (c - (int)KeyCode.F1);
+            return 0;
+        }
+
+        private bool IsHeld()
+        {
+            if (!inputBroken)
+            {
+                try { return Input.GetKey(key); }
+                catch (Exception)
+                {
+                    inputBroken = true;
+                    LoggerInstance.Warning("Stary Input nie dziala w tej grze - przechodze na odczyt klawisza przez WinAPI.");
+                }
+            }
+            int vk = ToVirtualKey(key);
+            if (vk == 0) return false;
+            try
+            {
+                if (!Application.isFocused) return false;
+                return (GetAsyncKeyState(vk) & 0x8000) != 0;
+            }
+            catch (Exception e)
+            {
+                if (errors++ < 10) LoggerInstance.Error("GetAsyncKeyState: " + e.Message);
+                return false;
+            }
+        }
 
         public override void OnInitializeMelon()
         {
@@ -74,15 +113,11 @@ namespace GangBeastsPee
             try
             {
                 float dt = Time.deltaTime;
-                bool held = false;
-                if (!inputBroken)
+                bool held = IsHeld();
+                if (held != wasHeld)
                 {
-                    try { held = Input.GetKey(key); }
-                    catch (Exception e)
-                    {
-                        inputBroken = true;
-                        LoggerInstance.Error("Input.GetKey nie dziala (gra moze uzywac nowego Input Systemu): " + e.Message);
-                    }
+                    wasHeld = held;
+                    if (held) { ScanEmitters(); nextScan = Time.time + 1f; LoggerInstance.Msg("Sikanie START, postaci: " + emitters.Count); }
                 }
 
                 if (held)
@@ -102,20 +137,45 @@ namespace GangBeastsPee
             }
         }
 
+        private sealed class Body
+        {
+            public Transform Hips, LeftThigh, RightThigh;
+        }
+
+        private readonly Dictionary<Transform, Body> bodies = new Dictionary<Transform, Body>();
+
         private void ScanEmitters()
         {
             emitters.Clear();
-            var seenRoots = new HashSet<int>();
+            bodies.Clear();
+            var byRoot = new Dictionary<int, Body>();
+            var rootOf = new Dictionary<int, Transform>();
+
             foreach (var o in FindAll(typeof(Transform)))
             {
                 var t = o as Transform;
                 if (t == null || !t.gameObject.activeInHierarchy) continue;
                 string n = t.name.ToLowerInvariant();
-                if (!(n.Contains("pelvis") || n.Contains("hips"))) continue;
+                bool hips = n.Contains("hips") || n.Contains("pelvis");
+                bool lt = n.Contains("leftthigh");
+                bool rt = n.Contains("rightthigh");
+                if (!hips && !lt && !rt) continue;
 
                 var root = t.root;
-                if (root == null || !seenRoots.Add(root.GetInstanceID())) continue;
-                emitters.Add(t);
+                if (root == null) continue;
+                int id = root.GetInstanceID();
+                Body b;
+                if (!byRoot.TryGetValue(id, out b)) { b = new Body(); byRoot[id] = b; rootOf[id] = root; }
+                if (hips && b.Hips == null) b.Hips = t;
+                else if (lt && b.LeftThigh == null) b.LeftThigh = t;
+                else if (rt && b.RightThigh == null) b.RightThigh = t;
+            }
+
+            foreach (var kv in byRoot)
+            {
+                if (kv.Value.Hips == null) continue;
+                emitters.Add(kv.Value.Hips);
+                bodies[kv.Value.Hips] = kv.Value;
             }
 
             if (nearestOnly.Value && emitters.Count > 1 && Camera.main != null)
@@ -130,6 +190,22 @@ namespace GangBeastsPee
                 emitters.Clear();
                 if (best != null) emitters.Add(best);
             }
+        }
+
+        // Przod postaci z ulozenia ud (osie kosci w tej grze sa dowolne), awaryjnie z osi biodra
+        private Vector3 FacingOf(Transform hips)
+        {
+            Body b;
+            if (bodies.TryGetValue(hips, out b) && b.LeftThigh != null && b.RightThigh != null)
+            {
+                Vector3 right = b.RightThigh.position - b.LeftThigh.position;
+                right.y = 0f;
+                if (right.sqrMagnitude > 0.0001f)
+                    return Vector3.Cross(right.normalized, Vector3.up);
+            }
+            Vector3 f = hips.forward;
+            f.y = 0f;
+            return f;
         }
 
         private void EmitFromAll(float dt)
@@ -149,7 +225,7 @@ namespace GangBeastsPee
 
         private void SpawnDroplet(Transform pelvis)
         {
-            Vector3 fwd = pelvis.forward * forwardSign.Value;
+            Vector3 fwd = FacingOf(pelvis) * forwardSign.Value;
             fwd.y = 0f;
             if (fwd.sqrMagnitude < 0.0001f) fwd = Vector3.forward;
             fwd.Normalize();
