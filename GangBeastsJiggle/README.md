@@ -20,3 +20,9 @@ Ustawienia w sekcji `GBPoop`: `FartKey` (domyślnie `P`), `FartVolume`, `FartSha
 ## Zmiany 2.3
 - Klawisze (G, H, J, P, F6–F10) czytane przez WinAPI – wcześniej G nie reagowało, bo stary Input w tej grze rzuca wyjątek.
 - Kupa i sraczka używają domyślnego materiału gry i warstwy modelu postaci, więc są widoczne.
+
+## Zmiany 3.0
+- **Pupa przepisana**: dwie widoczne, sprężynujące półkule w kolorze postaci, przyczepione do bioder. Poprzednia wersja skalowała kość przez własny komponent, a w IL2CPP nie działa on bez rejestracji (w logu był też `MissingMethodException` na `FindObjectsOfType`).
+- Klawisze do ustawienia pupy: **PgUp/PgDn** wyżej/niżej, **Home/End** dalej/bliżej ciała, **F7/F8** rozmiar, **F9/F10** siła drgań, **H** odwróć przód/tył. Wartości: `CheekBack`, `CheekUp`, `BaseScale`, `JiggleScale` w `UserData/MelonPreferences.cfg`.
+- **Pierdzenie to teraz prawdziwe dźwięki** (6 nagrań z Real_fart_sounds.mp3 wbudowanych w DLL). Gdyby się nie wczytały, używane są dźwięki generowane w kodzie.
+- Naprawa niewidocznej kupy i sraczki (shader `Sprites/Default` zamiast "Standard", który w URP się nie renderuje).

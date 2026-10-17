@@ -27,6 +27,13 @@ namespace GangBeastsJiggle
             if (c >= (int)KeyCode.A && c <= (int)KeyCode.Z) return 0x41 + (c - (int)KeyCode.A);
             if (c >= (int)KeyCode.Alpha0 && c <= (int)KeyCode.Alpha9) return 0x30 + (c - (int)KeyCode.Alpha0);
             if (c >= (int)KeyCode.F1 && c <= (int)KeyCode.F12) return 0x70 + (c - (int)KeyCode.F1);
+            switch (k)
+            {
+                case KeyCode.PageUp: return 0x21;
+                case KeyCode.PageDown: return 0x22;
+                case KeyCode.End: return 0x23;
+                case KeyCode.Home: return 0x24;
+            }
             return 0;
         }
 
@@ -179,7 +186,9 @@ namespace GangBeastsJiggle
     internal class Butt
     {
         public Component Actor;
-        public Vector3 Pos, Back, Up, Vel;
+        public Vector3 Pos, Back, Up, Side, HipsPos, Vel;
+        public Color Body = new Color(0.95f, 0.72f, 0.62f);
+        public Cheeks Cheeks;
         public float Unit = 0.4f;
         public static int VisLayer = -1;
 
@@ -219,8 +228,54 @@ namespace GangBeastsJiggle
                 float d = Mathf.Max(s.x, Mathf.Max(s.y, s.z));
                 if (d > 0.05f && d < 3f) b.Unit = d;
             }
+            try { b.SampleBody(top, log); }
+            catch (Exception e) { log.Warning("[Poop] Nie udalo sie odczytac koloru postaci: " + e.Message); }
+            try { b.Cheeks = Cheeks.Create(b); }
+            catch (Exception e) { log.Error("[Poop] Nie udalo sie zbudowac pupy: " + e); }
             log.Msg("[Poop] Dodano postac: " + actor.name + " (jednostka " + b.Unit.ToString("0.00") + ")");
             return b;
+        }
+
+        // Kolor postaci z materialu jej siatki (tulow/biodra), zeby pupa pasowala do gracza
+        private void SampleBody(Transform top, MelonLogger.Instance log)
+        {
+            Renderer best = null;
+            int bestScore = -1;
+            string bestName = "";
+            var q = new Queue<Transform>();
+            q.Enqueue(top);
+            int guard = 0;
+            while (q.Count > 0 && guard++ < 600)
+            {
+                var t = q.Dequeue();
+                for (int i = 0; i < t.childCount; i++) q.Enqueue(t.GetChild(i));
+                string n = t.name.ToLowerInvariant();
+                if (n.StartsWith("gb") || n.Contains("mouth") || n.Contains("brow") || n.Contains("tongue") || n.Contains("teeth") || n.Contains("lip")) continue;
+                var r = t.GetComponent<Renderer>();
+                if (r == null) continue;
+                int score = 0;
+                if (n.Contains("chest") || n.Contains("torso") || n.Contains("body")) score = 5;
+                else if (n.Contains("hips") || n.Contains("pelvis")) score = 4;
+                else if (n.Contains("arm") || n.Contains("hand") || n.Contains("leg") || n.Contains("foot")) score = 2;
+                else if (n.Contains("head")) score = 1;
+                else if (n.Contains("skin") || n.Contains("mesh")) score = 1;
+                if (score > bestScore) { bestScore = score; best = r; bestName = t.name; }
+            }
+            if (best == null) return;
+            Material m = best.sharedMaterial;
+            if (m == null) return;
+            string[] props = { "_Color", "_BaseColor", "_MainColor", "_TintColor", "_Tint", "_SkinColor", "_Albedo" };
+            foreach (var pn in props)
+            {
+                bool has;
+                try { has = m.HasProperty(pn); } catch { has = false; }
+                if (!has) continue;
+                Color c = m.GetColor(pn);
+                if (c.r > 0.95f && c.g > 0.95f && c.b > 0.95f) continue;
+                Body = new Color(c.r, c.g, c.b, 1f);
+                log.Msg("[Poop] Kolor postaci z '" + bestName + "' (" + pn + "): " + c.r.ToString("0.00") + ", " + c.g.ToString("0.00") + ", " + c.b.ToString("0.00"));
+                return;
+            }
         }
 
         public bool IsAlive()
@@ -240,6 +295,8 @@ namespace GangBeastsJiggle
             if (flip) fwd = -fwd;
             Back = -fwd;
             Up = upv;
+            Side = Vector3.Cross(upv, fwd).normalized;
+            HipsPos = hips.position;
             Pos = hips.position + Back * (backOffset * Unit) + Up * (upOffset * Unit);
             Vel = hipsBody != null ? hipsBody.velocity : Vector3.zero;
             return true;
@@ -353,7 +410,7 @@ namespace GangBeastsJiggle
 
         private static Type actorType;
         private static bool actorTypeSearched, loggedNoActor;
-        private static bool errLogged, scanErrLogged;
+        private static bool errLogged, scanErrLogged, lateErrLogged;
 
         private static Shader litShader;
         private static bool litSearched;
@@ -389,6 +446,8 @@ namespace GangBeastsJiggle
 
         public static void SceneLoaded()
         {
+            foreach (var b in butts.Values) { try { if (b.Cheeks != null) b.Cheeks.Destroy(); } catch { } }
+            Cheeks.All.Clear();
             butts.Clear();
             bad.Clear();
             drops.Clear();
@@ -433,7 +492,12 @@ namespace GangBeastsJiggle
                         }
                     }
                 }
-                if (dead != null) foreach (var k in dead) butts.Remove(k);
+                if (dead != null)
+                    foreach (var k in dead)
+                    {
+                        try { if (butts[k].Cheeks != null) butts[k].Cheeks.Destroy(); } catch { }
+                        butts.Remove(k);
+                    }
 
                 // P = pierdzenie (dzwiek + mocne trzesienie pupy); przytrzymanie powtarza
                 if (PoopKeys.Down(fartKey)) { Fart(); nextFart = Time.time + UnityEngine.Random.Range(0.55f, 0.9f); }
@@ -464,6 +528,32 @@ namespace GangBeastsJiggle
                 {
                     errLogged = true;
                     log.Error("Blad w Poop (kolejne takie same pomijam): " + e);
+                }
+            }
+        }
+
+        // Wywolywane w LateUpdate (po fizyce i animacji): ustawia i sprezynuje pupe
+        public static void LateTick()
+        {
+            if (PEnabled == null) return;
+            try
+            {
+                float dt = Time.deltaTime;
+                bool on = JiggleMod.Enabled.Value;
+                foreach (var b in butts.Values)
+                {
+                    if (b.Cheeks == null || !b.IsAlive()) continue;
+                    if (!b.Refresh(PFlip.Value, PBackOff.Value, PUpOff.Value)) continue;
+                    b.Cheeks.SetVisible(on);
+                    if (on) b.Cheeks.Step(dt);
+                }
+            }
+            catch (Exception e)
+            {
+                if (!lateErrLogged)
+                {
+                    lateErrLogged = true;
+                    log.Error("Blad w LateTick (kolejne takie same pomijam): " + e);
                 }
             }
         }
@@ -521,7 +611,7 @@ namespace GangBeastsJiggle
                 int n = Mathf.Max(1, butts.Count);
                 float vol = Mathf.Clamp(PFartVol.Value / Mathf.Sqrt(n), 0.15f, 1f);
                 for (int i = 0; i < n; i++) PlayFart(vol);
-                JiggleBone.ShakeAll(1.2f, PFartShake.Value);
+                Cheeks.ShakeAll(1.2f, PFartShake.Value);
             }
             catch (Exception e) { if (JiggleMod.Instance != null) JiggleMod.Instance.Fail("Fart", e); }
         }
@@ -537,7 +627,7 @@ namespace GangBeastsJiggle
             src.volume = vol;
             src.spatialBlend = 0f;
             src.playOnAwake = false;
-            src.pitch = UnityEngine.Random.Range(0.85f, 1.2f);
+            src.pitch = UnityEngine.Random.Range(0.92f, 1.08f);
             src.Play();
             UnityEngine.Object.Destroy(go, clip.length / src.pitch + 0.4f);
         }
@@ -546,17 +636,54 @@ namespace GangBeastsJiggle
         {
             if (fartClips != null) return;
             var list = new List<AudioClip>();
-            for (int i = 0; i < 5; i++)
+
+            // prawdziwe pierdniecia wbudowane w DLL (farts/*.raw: 16-bit PCM, mono, 32000 Hz)
+            try
             {
-                try
+                var asm = typeof(PoopFeature).Assembly;
+                var names = new List<string>(asm.GetManifestResourceNames());
+                names.Sort(StringComparer.Ordinal);
+                foreach (var rn in names)
                 {
-                    var c = MakeFart(i);
-                    if (c != null) list.Add(c);
+                    if (!rn.EndsWith(".raw", StringComparison.OrdinalIgnoreCase)) continue;
+                    try
+                    {
+                        byte[] bytes;
+                        using (var st = asm.GetManifestResourceStream(rn))
+                        using (var ms = new System.IO.MemoryStream())
+                        {
+                            st.CopyTo(ms);
+                            bytes = ms.ToArray();
+                        }
+                        int n = bytes.Length / 2;
+                        if (n < 100) continue;
+                        float[] d = new float[n];
+                        for (int i = 0; i < n; i++) d[i] = (short)(bytes[2 * i] | (bytes[2 * i + 1] << 8)) / 32768f;
+                        var clip = AudioClip.Create("GBFartReal" + list.Count, n, 1, 32000, false);
+                        SetClipData(clip, d);
+                        list.Add(clip);
+                    }
+                    catch (Exception e) { log.Error("[Fart] nie udalo sie wczytac " + rn + ": " + e.Message); }
                 }
-                catch (Exception e) { log.Error("[Fart] nie udalo sie wygenerowac dzwieku " + i + ": " + e.Message); }
+                if (list.Count > 0) log.Msg("[Fart] wczytano prawdziwych dzwiekow: " + list.Count);
+            }
+            catch (Exception e) { log.Error("[Fart] blad wczytywania dzwiekow: " + e.Message); }
+
+            // awaryjnie - dzwieki generowane w kodzie
+            if (list.Count == 0)
+            {
+                for (int i = 0; i < 5; i++)
+                {
+                    try
+                    {
+                        var c = MakeFart(i);
+                        if (c != null) list.Add(c);
+                    }
+                    catch (Exception e) { log.Error("[Fart] nie udalo sie wygenerowac dzwieku " + i + ": " + e.Message); }
+                }
+                log.Msg("[Fart] wygenerowano dzwiekow (zapasowych): " + list.Count);
             }
             fartClips = list.ToArray();
-            log.Msg("[Fart] wygenerowano dzwiekow: " + fartClips.Length);
         }
 
         // Dzwiek generowany w kodzie: brzeczacy puls o falujacej wysokosci, przerywany, z szumem i zanikaniem
@@ -779,7 +906,7 @@ namespace GangBeastsJiggle
 
         // ---------- Pomocnicze ----------
 
-        private static GameObject Prim(string name, PrimitiveType type, Color c)
+        internal static GameObject Prim(string name, PrimitiveType type, Color c)
         {
             var go = GameObject.CreatePrimitive(type);
             go.name = name;
@@ -797,37 +924,34 @@ namespace GangBeastsJiggle
             return go;
         }
 
+        // Ta gra uzywa URP: wbudowany shader "Standard" (domyslny material prymitywu) sie w niej nie renderuje.
+        // "Sprites/Default" dziala (uzywaja go tez mody Faces i Grab), wiec bierzemy go.
         private static void Colorize(Renderer r, Color c)
         {
-            // 1) domyslny material prymitywu - zawsze obecny w grze
-            try
-            {
-                Material dm = r.material;
-                if (dm != null && dm.shader != null && dm.shader.isSupported)
-                {
-                    dm.color = c;
-                    return;
-                }
-            }
-            catch { }
-            // 2) zapasowy shader, tylko taki ktory gra obsluguje
             if (!litSearched)
             {
                 litSearched = true;
-                string[] names = { "Unlit/Color", "Sprites/Default", "Standard", "Legacy Shaders/Diffuse", "Mobile/Diffuse" };
+                string[] names = { "Sprites/Default", "Unlit/Color", "Universal Render Pipeline/Unlit", "Hidden/Internal-Colored" };
                 foreach (var n in names)
                 {
-                    var sh = Shader.Find(n);
-                    if (sh != null && sh.isSupported) { litShader = sh; break; }
+                    Shader sh = null;
+                    try { sh = Shader.Find(n); } catch { }
+                    if (sh != null) { litShader = sh; break; }
                 }
-                MelonLogger.Msg("[Poop] shader zapasowy: " + (litShader != null ? litShader.name : "(brak)"));
+                MelonLogger.Msg("[Poop] shader: " + (litShader != null ? litShader.name : "(brak - domyslny material)"));
             }
-            if (litShader != null)
+            try
             {
-                var m = new Material(litShader);
-                m.color = c;
-                r.sharedMaterial = m;
+                if (litShader != null)
+                {
+                    var m = new Material(litShader);
+                    m.color = c;
+                    r.sharedMaterial = m;
+                    return;
+                }
+                r.material.color = c;
             }
+            catch (Exception e) { MelonLogger.Warning("[Poop] Colorize: " + e.Message); }
         }
 
         // FindObjectsOfType<T>() przez refleksje - w IL2CPP zwraca tablice Il2Cpp zamiast T[]

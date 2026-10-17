@@ -7,7 +7,7 @@ using MelonLoader;
 using UnityEngine;
 using UnityEngine.Rendering;
 
-[assembly: MelonInfo(typeof(GBWilly.WillyMod), "Gang Beasts Willy", "1.1.0", "Claude")]
+[assembly: MelonInfo(typeof(GBWilly.WillyMod), "Gang Beasts Willy", "1.2.0", "Claude")]
 
 namespace GBWilly
 {
@@ -549,7 +549,7 @@ namespace GBWilly
             PSpread = cat.CreateEntry("PeeSpread", 0.12f);
             PRate = cat.CreateEntry("PeeRate", 45f);
             PMaxPuddles = cat.CreateEntry("MaxPuddles", 300);
-            LoggerInstance.Msg("Gang Beasts Willy 1.1 zaladowany. K (przytrzymaj) = sikanie. F6 wl/wyl, F7/F8 rozmiar, PgUp/PgDn wysokosc, Home/End przod/tyl, F9 sprzatanie kaluz, F10 odwroc przod.");
+            LoggerInstance.Msg("Gang Beasts Willy 1.2 zaladowany. K (przytrzymaj) = sikanie. F6 wl/wyl, F7/F8 rozmiar, PgUp/PgDn wysokosc, Home/End przod/tyl, F9 sprzatanie kaluz, F10 odwroc przod.");
         }
 
         public override void OnSceneWasLoaded(int buildIndex, string sceneName)
@@ -855,37 +855,34 @@ namespace GBWilly
             return go;
         }
 
+        // Ta gra uzywa URP: wbudowany shader "Standard" (domyslny material prymitywu) sie w niej nie renderuje.
+        // "Sprites/Default" dziala (uzywaja go tez mody Faces i Grab), wiec bierzemy go.
         internal static void Colorize(Renderer r, Color c)
         {
-            // 1) domyslny material prymitywu - zawsze jest w grze i sie renderuje
-            try
-            {
-                Material dm = r.material;
-                if (dm != null && dm.shader != null && dm.shader.isSupported)
-                {
-                    dm.color = c;
-                    return;
-                }
-            }
-            catch { }
-            // 2) wlasny shader, ale tylko taki, ktory gra faktycznie obsluguje
             if (!shaderSearched)
             {
                 shaderSearched = true;
-                string[] names = { "Unlit/Color", "Sprites/Default", "Standard", "Legacy Shaders/Diffuse", "Mobile/Diffuse" };
+                string[] names = { "Sprites/Default", "Unlit/Color", "Universal Render Pipeline/Unlit", "Hidden/Internal-Colored" };
                 foreach (var n in names)
                 {
-                    var sh = Shader.Find(n);
-                    if (sh != null && sh.isSupported) { cachedShader = sh; break; }
+                    Shader sh = null;
+                    try { sh = Shader.Find(n); } catch { }
+                    if (sh != null) { cachedShader = sh; break; }
                 }
-                MelonLogger.Msg("[Willy] shader zapasowy: " + (cachedShader != null ? cachedShader.name : "(brak)"));
+                MelonLogger.Msg("[Willy] shader: " + (cachedShader != null ? cachedShader.name : "(brak - domyslny material)"));
             }
-            if (cachedShader != null)
+            try
             {
-                var m = new Material(cachedShader);
-                m.color = c;
-                r.sharedMaterial = m;
+                if (cachedShader != null)
+                {
+                    var m = new Material(cachedShader);
+                    m.color = c;
+                    r.sharedMaterial = m;
+                    return;
+                }
+                r.material.color = c;
             }
+            catch (Exception e) { MelonLogger.Warning("[Willy] Colorize: " + e.Message); }
         }
 
         private static Shader litShader;

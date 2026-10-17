@@ -6,6 +6,9 @@
     <LangVersion>7.3</LangVersion>
   </PropertyGroup>
   <ItemGroup>
+    <EmbeddedResource Include="farts\*.raw" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="LavaGang.MelonLoader" Version="0.6.1" IncludeAssets="compile" />
     <PackageReference Include="UnityEngine.Modules" Version="2019.4.21" IncludeAssets="compile" />
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />

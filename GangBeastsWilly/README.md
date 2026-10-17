@@ -26,3 +26,6 @@ Ustawienia: `UserData/MelonPreferences.cfg`, sekcja `GBWilly2` (`Size`, `Forward
 - Naprawione niewidoczne pisiorki (wcześniej chowały się w ciele postaci).
 - Klawisze czytane przez WinAPI, więc K/F6-F10 działają też gdy stary Input w grze nie działa.
 - Ustawienia są teraz w sekcji `GBWilly2` (nowe domyślne wartości).
+
+## Zmiany 1.2
+- Naprawa niewidocznych pisiorków, kropli i kałuż: gra używa URP, w którym wbudowany shader "Standard" się nie renderuje. Teraz używany jest `Sprites/Default` (tak jak w modach Faces i Grab).
