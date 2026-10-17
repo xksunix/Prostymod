@@ -1,0 +1,31 @@
+name: Build Gang Beasts Grab
+on:
+  push:
+    paths:
+      - 'GangBeastsGrab/**'
+      - '.github/workflows/gangbeasts-grab.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - run: dotnet build GangBeastsGrab/GangBeastsGrab.csproj -c Release -o out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GangBeastsGrab-dll
+          path: out/GangBeastsGrab.dll
+      - name: Commit DLL to dist/
+        run: |
+          mkdir -p dist
+          cp out/GangBeastsGrab.dll dist/GangBeastsGrab.dll
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add dist/GangBeastsGrab.dll
+          git commit -m "Build GangBeastsGrab.dll [skip ci]" || echo "no changes"
+          git push
