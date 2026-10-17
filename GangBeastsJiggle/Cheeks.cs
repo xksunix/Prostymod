@@ -18,6 +18,10 @@ namespace GangBeastsJiggle
         private Vector3 pl, vl, pr, vr;
         private bool init;
         private float shake, shakeDur = 1f, shakeForce = 1f;
+        private readonly List<Renderer> rends = new List<Renderer>();
+        private readonly List<float> tones = new List<float>();
+        private bool cloned;
+        private float colorTimer;
 
         private Cheeks(Butt b) { butt = b; }
 
@@ -45,16 +49,49 @@ namespace GangBeastsJiggle
         {
             root = new GameObject("GBCheeks");
             Color c = butt.Body;
-            left = Make("CheekL", PrimitiveType.Sphere, c);
-            right = Make("CheekR", PrimitiveType.Sphere, c);
+            left = Make("CheekL", PrimitiveType.Sphere, c, 1f);
+            right = Make("CheekR", PrimitiveType.Sphere, c, 1f);
             // ciemniejsza kreska miedzy polkulami, zeby bylo widac, ze to dwie
-            cleft = Make("Cleft", PrimitiveType.Capsule, new Color(c.r * 0.55f, c.g * 0.55f, c.b * 0.55f));
+            cleft = Make("Cleft", PrimitiveType.Capsule, c, 0.55f);
+            ApplyColor();
         }
 
-        private Transform Make(string name, PrimitiveType type, Color c)
+        // Kolor z postaci; gdy gra nie trzyma go w prostym parametrze (tekstura) - kopia materialu ciala
+        private void ApplyColor()
+        {
+            Color c = butt.Body;
+            if (butt.HasColor || butt.BodyMat == null)
+            {
+                for (int i = 0; i < rends.Count; i++)
+                {
+                    try
+                    {
+                        float t = tones[i];
+                        rends[i].sharedMaterial.color = new Color(c.r * t, c.g * t, c.b * t, 1f);
+                    }
+                    catch { }
+                }
+                return;
+            }
+            Material src = butt.BodyMat;
+            for (int i = 0; i < rends.Count; i++)
+            {
+                try
+                {
+                    if (!cloned) rends[i].sharedMaterial = new Material(src);
+                    else rends[i].sharedMaterial.CopyPropertiesFromMaterial(src);
+                }
+                catch { }
+            }
+            cloned = true;
+        }
+
+        private Transform Make(string name, PrimitiveType type, Color c, float tone)
         {
             var go = PoopFeature.Prim(name, type, c);
             go.transform.SetParent(root.transform, false);
+            var r = go.GetComponent<Renderer>();
+            if (r != null) { rends.Add(r); tones.Add(tone); }
             return go.transform;
         }
 
@@ -76,6 +113,8 @@ namespace GangBeastsJiggle
         public void Step(float dt)
         {
             if (root == null) return;
+            colorTimer -= dt;
+            if (colorTimer <= 0f) { colorTimer = 0.5f; butt.ResampleColor(); ApplyColor(); }
             Vector3 up = butt.Up, back = butt.Back, side = butt.Side;
             float u = butt.Unit;
             float d = 0.26f * u * JiggleMod.BaseScale.Value;            // srednica jednej polkuli

@@ -236,46 +236,26 @@ namespace GangBeastsJiggle
             return b;
         }
 
-        // Kolor postaci z materialu jej siatki (tulow/biodra), zeby pupa pasowala do gracza
+        public Renderer BodyR;
+        public bool HasColor;
+        public Material BodyMat { get { try { return BodyR != null ? BodyR.sharedMaterial : null; } catch { return null; } } }
+
+        // Kolor postaci z materialu jej prawdziwej siatki; odczytywany co jakis czas, bo gra ustawia go juz po stworzeniu postaci
         private void SampleBody(Transform top, MelonLogger.Instance log)
         {
-            Renderer best = null;
-            int bestScore = -1;
-            string bestName = "";
-            var q = new Queue<Transform>();
-            q.Enqueue(top);
-            int guard = 0;
-            while (q.Count > 0 && guard++ < 600)
-            {
-                var t = q.Dequeue();
-                for (int i = 0; i < t.childCount; i++) q.Enqueue(t.GetChild(i));
-                string n = t.name.ToLowerInvariant();
-                if (n.StartsWith("gb") || n.Contains("mouth") || n.Contains("brow") || n.Contains("tongue") || n.Contains("teeth") || n.Contains("lip")) continue;
-                var r = t.GetComponent<Renderer>();
-                if (r == null) continue;
-                int score = 0;
-                if (n.Contains("chest") || n.Contains("torso") || n.Contains("body")) score = 5;
-                else if (n.Contains("hips") || n.Contains("pelvis")) score = 4;
-                else if (n.Contains("arm") || n.Contains("hand") || n.Contains("leg") || n.Contains("foot")) score = 2;
-                else if (n.Contains("head")) score = 1;
-                else if (n.Contains("skin") || n.Contains("mesh")) score = 1;
-                if (score > bestScore) { bestScore = score; best = r; bestName = t.name; }
-            }
-            if (best == null) return;
-            Material m = best.sharedMaterial;
-            if (m == null) return;
-            string[] props = { "_Color", "_BaseColor", "_MainColor", "_TintColor", "_Tint", "_SkinColor", "_Albedo" };
-            foreach (var pn in props)
-            {
-                bool has;
-                try { has = m.HasProperty(pn); } catch { has = false; }
-                if (!has) continue;
-                Color c = m.GetColor(pn);
-                if (c.r > 0.95f && c.g > 0.95f && c.b > 0.95f) continue;
-                Body = new Color(c.r, c.g, c.b, 1f);
-                log.Msg("[Poop] Kolor postaci z '" + bestName + "' (" + pn + "): " + c.r.ToString("0.00") + ", " + c.g.ToString("0.00") + ", " + c.b.ToString("0.00"));
-                return;
-            }
+            BodyR = BodyColor.FindBodyRenderer(top);
+            if (BodyR == null) { log.Warning("[Poop] Nie znaleziono siatki postaci - pupa dostanie domyslny kolor."); return; }
+            log.Msg("[Poop] Siatka koloru: '" + BodyR.name + "' " + BodyColor.Describe(BodyR));
+            ResampleColor();
+            log.Msg("[Poop] Kolor pupy: " + (HasColor ? Body.r.ToString("0.00") + ", " + Body.g.ToString("0.00") + ", " + Body.b.ToString("0.00") : "z parametru nie da sie odczytac - uzyje materialu ciala"));
+        }
+
+        public void ResampleColor()
+        {
+            if (BodyR == null) return;
+            Color c; string pn;
+            if (BodyColor.TryRead(BodyR, out c, out pn)) { HasColor = true; Body = c; }
+            else HasColor = false;
         }
 
         public bool IsAlive()
@@ -428,7 +408,7 @@ namespace GangBeastsJiggle
             log = logger;
             var cat = MelonPreferences.CreateCategory("GBPoop", "Gang Beasts Poop");
             PEnabled = cat.CreateEntry("Enabled", true);
-            PFlip = cat.CreateEntry("FlipDirection", false);
+            PFlip = cat.CreateEntry("FlipDirectionV3", false);
             PBackOff = cat.CreateEntry("BackOffset", 0.55f);
             PUpOff = cat.CreateEntry("UpOffset", -0.1f);
             PSpeed = cat.CreateEntry("Speed", 6f);
@@ -545,7 +525,7 @@ namespace GangBeastsJiggle
                     if (b.Cheeks == null || !b.IsAlive()) continue;
                     if (!b.Refresh(PFlip.Value, PBackOff.Value, PUpOff.Value)) continue;
                     b.Cheeks.SetVisible(on);
-                    if (on) b.Cheeks.Step(dt);
+                    if (on) { b.Cheeks.Step(dt); }
                 }
             }
             catch (Exception e)

@@ -7,7 +7,7 @@ using MelonLoader;
 using UnityEngine;
 using UnityEngine.Rendering;
 
-[assembly: MelonInfo(typeof(GBWilly.WillyMod), "Gang Beasts Willy", "1.2.0", "Claude")]
+[assembly: MelonInfo(typeof(GBWilly.WillyMod), "Gang Beasts Willy", "1.3.0", "Claude")]
 
 namespace GBWilly
 {
@@ -264,6 +264,7 @@ namespace GBWilly
             shaft = Prim("Nub", PrimitiveType.Capsule, 1.0f);
             ballL = Prim("BallL", PrimitiveType.Sphere, 0.94f);
             ballR = Prim("BallR", PrimitiveType.Sphere, 0.94f);
+            Recolor();
         }
 
         private Transform Prim(string name, PrimitiveType type, float tone)
@@ -283,54 +284,70 @@ namespace GBWilly
                 Color c = colorFound ? bodyColor : new Color(0.95f, 0.72f, 0.62f);
                 // lekko jasniej niz ciasto, zeby bylo go widac na tle tulowia
                 WillyMod.Colorize(r, new Color(Mathf.Min(1f, c.r * tone * 1.08f), Mathf.Min(1f, c.g * tone * 1.08f), Mathf.Min(1f, c.b * tone * 1.08f)));
+                rends.Add(r);
+                tones.Add(tone);
             }
             return go.transform;
         }
 
-        // Kolor postaci: bierzemy z materialu jej siatki (tulow/biodra), zeby pisiorek pasowal do gracza
+        private Renderer bodyR;
+        private readonly List<Renderer> rends = new List<Renderer>();
+        private readonly List<float> tones = new List<float>();
+        private bool cloned;
+        private float colorTimer;
+
+        // Kolor postaci z materialu jej prawdziwej siatki (nie z koliderow); odswiezany, bo gra ustawia go po stworzeniu postaci
         private void SampleBody(Transform top, MelonLogger.Instance log)
         {
-            Renderer best = null;
-            int bestScore = -1;
-            string bestName = "";
-            var q = new Queue<Transform>();
-            q.Enqueue(top);
-            int guard = 0;
-            while (q.Count > 0 && guard++ < 600)
-            {
-                var t = q.Dequeue();
-                for (int i = 0; i < t.childCount; i++) q.Enqueue(t.GetChild(i));
-                string n = t.name.ToLowerInvariant();
-                if (n.StartsWith("gb") || n.Contains("mouth") || n.Contains("brow") || n.Contains("tongue") || n.Contains("teeth") || n.Contains("lip")) continue;
-                var r = t.GetComponent<Renderer>();
-                if (r == null) continue;
-                int score = 0;
-                if (n.Contains("chest") || n.Contains("torso") || n.Contains("body")) score = 5;
-                else if (n.Contains("hips") || n.Contains("pelvis")) score = 4;
-                else if (n.Contains("arm") || n.Contains("hand") || n.Contains("leg") || n.Contains("foot")) score = 2;
-                else if (n.Contains("head")) score = 1;
-                else if (n.Contains("skin") || n.Contains("mesh")) score = 1;
-                if (score > bestScore) { bestScore = score; best = r; bestName = t.name; }
-            }
-            if (best == null) { log.Warning("Nie znaleziono siatki postaci - pisiorek dostanie domyslny kolor."); return; }
+            bodyR = BodyColor.FindBodyRenderer(top);
+            if (bodyR == null) { log.Warning("Nie znaleziono siatki postaci - pisiorek dostanie domyslny kolor."); return; }
+            try { bodyLayer = bodyR.gameObject.layer; } catch { }
+            log.Msg("Siatka koloru: '" + bodyR.name + "' " + BodyColor.Describe(bodyR));
+            ReadColor();
+            log.Msg("Kolor pisiorka: " + (colorFound ? bodyColor.r.ToString("0.00") + ", " + bodyColor.g.ToString("0.00") + ", " + bodyColor.b.ToString("0.00") : "z parametru nie da sie odczytac - uzyje materialu ciala"));
+        }
 
-            try { bodyLayer = best.gameObject.layer; } catch { }
-            Material m = best.sharedMaterial;
-            if (m == null) return;
-            string[] props = { "_Color", "_BaseColor", "_MainColor", "_TintColor", "_Tint", "_SkinColor", "_Albedo" };
-            foreach (var pn in props)
+        private void ReadColor()
+        {
+            if (bodyR == null) return;
+            Color c; string pn;
+            if (BodyColor.TryRead(bodyR, out c, out pn)) { bodyColor = c; colorFound = true; }
+            else colorFound = false;
+        }
+
+        private Material BodyMat()
+        {
+            try { return bodyR != null ? bodyR.sharedMaterial : null; } catch { return null; }
+        }
+
+        private void Recolor()
+        {
+            ReadColor();
+            Material src = BodyMat();
+            if (colorFound || src == null)
             {
-                bool has;
-                try { has = m.HasProperty(pn); } catch { has = false; }
-                if (!has) continue;
-                Color c = m.GetColor(pn);
-                if (c.r > 0.95f && c.g > 0.95f && c.b > 0.95f) continue;   // biel = kolor z tekstury, nie z parametru
-                bodyColor = c;
-                colorFound = true;
-                log.Msg("Kolor postaci z '" + bestName + "' (" + pn + "): " + c.r.ToString("0.00") + ", " + c.g.ToString("0.00") + ", " + c.b.ToString("0.00"));
+                Color c = colorFound ? bodyColor : new Color(0.95f, 0.72f, 0.62f);
+                for (int i = 0; i < rends.Count; i++)
+                {
+                    try
+                    {
+                        float t = tones[i] * 1.08f;
+                        rends[i].sharedMaterial.color = new Color(Mathf.Min(1f, c.r * t), Mathf.Min(1f, c.g * t), Mathf.Min(1f, c.b * t), 1f);
+                    }
+                    catch { }
+                }
                 return;
             }
-            log.Msg("Kolor postaci z '" + bestName + "': brak prostego parametru koloru - uzywam koloru domyslnego.");
+            for (int i = 0; i < rends.Count; i++)
+            {
+                try
+                {
+                    if (!cloned) rends[i].sharedMaterial = new Material(src);
+                    else rends[i].sharedMaterial.CopyPropertiesFromMaterial(src);
+                }
+                catch { }
+            }
+            cloned = true;
         }
 
         public bool IsAlive()
@@ -351,6 +368,8 @@ namespace GBWilly
         // Wywolywane w LateUpdate - po fizyce i animacji
         public void Step(float dt)
         {
+            colorTimer -= dt;
+            if (colorTimer <= 0f) { colorTimer = 0.5f; Recolor(); }
             Vector3 right = rightArm.position - leftArm.position;
             Vector3 upv = head.position - hips.position;
             if (right.sqrMagnitude < 1e-6f || upv.sqrMagnitude < 1e-6f) return;
@@ -549,7 +568,7 @@ namespace GBWilly
             PSpread = cat.CreateEntry("PeeSpread", 0.12f);
             PRate = cat.CreateEntry("PeeRate", 45f);
             PMaxPuddles = cat.CreateEntry("MaxPuddles", 300);
-            LoggerInstance.Msg("Gang Beasts Willy 1.2 zaladowany. K (przytrzymaj) = sikanie. F6 wl/wyl, F7/F8 rozmiar, PgUp/PgDn wysokosc, Home/End przod/tyl, F9 sprzatanie kaluz, F10 odwroc przod.");
+            LoggerInstance.Msg("Gang Beasts Willy 1.3 zaladowany. K (przytrzymaj) = sikanie. F6 wl/wyl, F7/F8 rozmiar, PgUp/PgDn wysokosc, Home/End przod/tyl, F9 sprzatanie kaluz, F10 odwroc przod.");
         }
 
         public override void OnSceneWasLoaded(int buildIndex, string sceneName)
