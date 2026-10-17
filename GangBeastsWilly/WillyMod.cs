@@ -2,14 +2,66 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using MelonLoader;
 using UnityEngine;
 using UnityEngine.Rendering;
 
-[assembly: MelonInfo(typeof(GBWilly.WillyMod), "Gang Beasts Willy", "1.0.0", "Claude")]
+[assembly: MelonInfo(typeof(GBWilly.WillyMod), "Gang Beasts Willy", "1.1.0", "Claude")]
 
 namespace GBWilly
 {
+    // ------------------------------------------------------------------
+    //  Klawisze przez WinAPI (stary Input w tej grze rzuca wyjatek, a Input System nie istnieje)
+    // ------------------------------------------------------------------
+    internal static class WinKey
+    {
+        [DllImport("user32.dll")]
+        private static extern short GetAsyncKeyState(int vKey);
+
+        private class St { public int Frame = -1; public bool Now, Prev; }
+        private static readonly Dictionary<int, St> states = new Dictionary<int, St>();
+        private static int errors;
+
+        private static int Vk(KeyCode k)
+        {
+            int c = (int)k;
+            if (c >= (int)KeyCode.A && c <= (int)KeyCode.Z) return 0x41 + (c - (int)KeyCode.A);
+            if (c >= (int)KeyCode.Alpha0 && c <= (int)KeyCode.Alpha9) return 0x30 + (c - (int)KeyCode.Alpha0);
+            if (c >= (int)KeyCode.F1 && c <= (int)KeyCode.F12) return 0x70 + (c - (int)KeyCode.F1);
+            switch (k)
+            {
+                case KeyCode.PageUp: return 0x21;
+                case KeyCode.PageDown: return 0x22;
+                case KeyCode.End: return 0x23;
+                case KeyCode.Home: return 0x24;
+            }
+            return 0;
+        }
+
+        private static St Get(KeyCode k)
+        {
+            int vk = Vk(k);
+            if (vk == 0) return null;
+            St s;
+            if (!states.TryGetValue(vk, out s)) { s = new St(); states[vk] = s; }
+            int frame = Time.frameCount;
+            if (s.Frame != frame)
+            {
+                s.Prev = s.Now;
+                s.Frame = frame;
+                bool now = false;
+                try { now = Application.isFocused && (GetAsyncKeyState(vk) & 0x8000) != 0; }
+                catch (Exception e) { if (errors++ < 5) MelonLogger.Error("[Willy] GetAsyncKeyState: " + e.Message); }
+                s.Now = now;
+            }
+            return s;
+        }
+
+        public static bool Held(KeyCode k) { var s = Get(k); return s != null && s.Now; }
+        public static bool Down(KeyCode k) { var s = Get(k); return s != null && s.Now && !s.Prev; }
+    }
+
     // ------------------------------------------------------------------
     //  Klawisze (przez refleksje: stary Input albo Input System)
     // ------------------------------------------------------------------
@@ -28,6 +80,7 @@ namespace GBWilly
         private static bool Query(KeyCode k, bool down)
         {
             if (mode == 0) Resolve();
+            if (mode == 4) return down ? WinKey.Down(k) : WinKey.Held(k);
             if (mode == 1)
             {
                 try
@@ -39,7 +92,7 @@ namespace GBWilly
                 catch
                 {
                     fails++;
-                    if (fails >= 5) { fails = 0; mode = 0; Resolve(); }
+                    if (fails >= 3) { fails = 0; mode = 4; MelonLogger.Warning("[Willy] Stary Input nie dziala - klawisze przez WinAPI."); }
                     return false;
                 }
             }
@@ -97,7 +150,7 @@ namespace GBWilly
                 if (tKeyboard != null) break;
             }
             if (tKeyboard != null) { mode = 2; MelonLogger.Msg("[Willy] klawisze: Input System"); }
-            else { mode = 3; MelonLogger.Warning("[Willy] Nie znaleziono systemu wejscia - klawisze nie beda dzialac."); }
+            else { mode = 4; MelonLogger.Msg("[Willy] klawisze: WinAPI"); }
         }
 
         private static string NewName(KeyCode k)
@@ -154,7 +207,7 @@ namespace GBWilly
         private float unit = 0.4f;
         private Color bodyColor = new Color(0.9f, 0.7f, 0.6f);
         private bool colorFound;
-        private Material srcMat;
+        private int bodyLayer = -1;
 
         private Vector3 tip, tipV, bl, blV, br, brV;
         private bool init;
@@ -220,17 +273,16 @@ namespace GBWilly
             var col = go.GetComponent<Collider>();
             if (col != null) UnityEngine.Object.DestroyImmediate(col);
             go.transform.SetParent(root.transform, false);
+            if (bodyLayer >= 0) go.layer = bodyLayer;
             var r = go.GetComponent<Renderer>();
             if (r != null)
             {
                 r.shadowCastingMode = ShadowCastingMode.Off;
-                r.receiveShadows = true;
-                if (colorFound)
-                    WillyMod.ColorizeLit(r, new Color(bodyColor.r * tone, bodyColor.g * tone, bodyColor.b * tone));
-                else if (srcMat != null)
-                    r.sharedMaterial = new Material(srcMat);
-                else
-                    WillyMod.ColorizeLit(r, new Color(0.9f * tone, 0.7f * tone, 0.6f * tone));
+                r.receiveShadows = false;
+                r.enabled = true;
+                Color c = colorFound ? bodyColor : new Color(0.95f, 0.72f, 0.62f);
+                // lekko jasniej niz ciasto, zeby bylo go widac na tle tulowia
+                WillyMod.Colorize(r, new Color(Mathf.Min(1f, c.r * tone * 1.08f), Mathf.Min(1f, c.g * tone * 1.08f), Mathf.Min(1f, c.b * tone * 1.08f)));
             }
             return go.transform;
         }
@@ -262,6 +314,7 @@ namespace GBWilly
             }
             if (best == null) { log.Warning("Nie znaleziono siatki postaci - pisiorek dostanie domyslny kolor."); return; }
 
+            try { bodyLayer = best.gameObject.layer; } catch { }
             Material m = best.sharedMaterial;
             if (m == null) return;
             string[] props = { "_Color", "_BaseColor", "_MainColor", "_TintColor", "_Tint", "_SkinColor", "_Albedo" };
@@ -277,8 +330,7 @@ namespace GBWilly
                 log.Msg("Kolor postaci z '" + bestName + "' (" + pn + "): " + c.r.ToString("0.00") + ", " + c.g.ToString("0.00") + ", " + c.b.ToString("0.00"));
                 return;
             }
-            srcMat = m;
-            log.Msg("Kolor postaci z '" + bestName + "': brak prostego parametru koloru - kopiuje material siatki (" + m.name + ").");
+            log.Msg("Kolor postaci z '" + bestName + "': brak prostego parametru koloru - uzywam koloru domyslnego.");
         }
 
         public bool IsAlive()
@@ -316,9 +368,9 @@ namespace GBWilly
             lift = Mathf.Lerp(lift, Peeing ? 1f : 0f, Mathf.Clamp01(dt * 8f));
             Vector3 down = -upv;
 
-            Vector3 tipRest = b + fwd * (0.17f * u * (1f + 0.7f * lift)) + down * (0.15f * u * (1f - lift)) + upv * (0.03f * u * lift);
-            Vector3 blRest = b + down * (0.11f * u) - side * (0.08f * u) + fwd * (0.02f * u);
-            Vector3 brRest = b + down * (0.11f * u) + side * (0.08f * u) + fwd * (0.02f * u);
+            Vector3 tipRest = b + fwd * (0.34f * u * (1f + 0.6f * lift)) + down * (0.28f * u * (1f - lift)) + upv * (0.05f * u * lift);
+            Vector3 blRest = b + down * (0.14f * u) - side * (0.10f * u) + fwd * (0.04f * u);
+            Vector3 brRest = b + down * (0.14f * u) + side * (0.10f * u) + fwd * (0.04f * u);
 
             if (!init)
             {
@@ -334,12 +386,12 @@ namespace GBWilly
             Spring(ref br, ref brV, brRest, 130f * jig, 6f / Mathf.Sqrt(jig), sdt);
 
             // nie pozwol odleciec za daleko od podstawy (np. po teleportacji postaci)
-            tip = ClampFrom(b, tip, 0.45f * u);
-            bl = ClampFrom(b, bl, 0.35f * u);
-            br = ClampFrom(b, br, 0.35f * u);
+            tip = ClampFrom(b, tip, 0.75f * u);
+            bl = ClampFrom(b, bl, 0.45f * u);
+            br = ClampFrom(b, br, 0.45f * u);
 
             Vector3 dv = tip - b;
-            float th = 0.17f * u;
+            float th = 0.15f * u;
             float len = Mathf.Max(th, dv.magnitude + th * 0.5f);
             Vector3 dir = dv.sqrMagnitude > 1e-8f ? dv.normalized : fwd;
 
@@ -347,7 +399,7 @@ namespace GBWilly
             shaft.rotation = Quaternion.FromToRotation(Vector3.up, dir);
             shaft.localScale = new Vector3(th, len * 0.5f, th);
 
-            float bd = 0.17f * u;
+            float bd = 0.19f * u;
             ballL.position = bl;
             ballL.localScale = Vector3.one * bd;
             ballR.position = br;
@@ -486,18 +538,18 @@ namespace GBWilly
 
         public override void OnApplicationStart()
         {
-            var cat = MelonPreferences.CreateCategory("GBWilly", "Gang Beasts Willy");
+            var cat = MelonPreferences.CreateCategory("GBWilly2", "Gang Beasts Willy");
             PEnabled = cat.CreateEntry("Enabled", true);
             PFlip = cat.CreateEntry("FlipForward", false);
-            PSize = cat.CreateEntry("Size", 1.0f);
-            POffF = cat.CreateEntry("ForwardOffset", 0.42f);
-            POffU = cat.CreateEntry("UpOffset", -0.12f);
+            PSize = cat.CreateEntry("Size", 1.2f);
+            POffF = cat.CreateEntry("ForwardOffset", 0.62f);
+            POffU = cat.CreateEntry("UpOffset", -0.10f);
             PJiggle = cat.CreateEntry("JiggleAmount", 1.0f);
             PSpeed = cat.CreateEntry("PeeSpeed", 5f);
             PSpread = cat.CreateEntry("PeeSpread", 0.12f);
             PRate = cat.CreateEntry("PeeRate", 45f);
             PMaxPuddles = cat.CreateEntry("MaxPuddles", 300);
-            LoggerInstance.Msg("Gang Beasts Willy 1.0 zaladowany. K (przytrzymaj) = sikanie. F6 wl/wyl, F7/F8 rozmiar, PgUp/PgDn wysokosc, Home/End przod/tyl, F9 sprzatanie kaluz, F10 odwroc przod.");
+            LoggerInstance.Msg("Gang Beasts Willy 1.1 zaladowany. K (przytrzymaj) = sikanie. F6 wl/wyl, F7/F8 rozmiar, PgUp/PgDn wysokosc, Home/End przod/tyl, F9 sprzatanie kaluz, F10 odwroc przod.");
         }
 
         public override void OnSceneWasLoaded(int buildIndex, string sceneName)
@@ -805,28 +857,34 @@ namespace GBWilly
 
         internal static void Colorize(Renderer r, Color c)
         {
+            // 1) domyslny material prymitywu - zawsze jest w grze i sie renderuje
+            try
+            {
+                Material dm = r.material;
+                if (dm != null && dm.shader != null && dm.shader.isSupported)
+                {
+                    dm.color = c;
+                    return;
+                }
+            }
+            catch { }
+            // 2) wlasny shader, ale tylko taki, ktory gra faktycznie obsluguje
             if (!shaderSearched)
             {
                 shaderSearched = true;
-                string[] names = { "Unlit/Color", "Sprites/Default", "Standard", "Legacy Shaders/Diffuse" };
+                string[] names = { "Unlit/Color", "Sprites/Default", "Standard", "Legacy Shaders/Diffuse", "Mobile/Diffuse" };
                 foreach (var n in names)
                 {
                     var sh = Shader.Find(n);
-                    if (sh != null) { cachedShader = sh; break; }
+                    if (sh != null && sh.isSupported) { cachedShader = sh; break; }
                 }
-                MelonLogger.Msg("[Willy] shader: " + (cachedShader != null ? cachedShader.name : "(brak - domyslny material)"));
+                MelonLogger.Msg("[Willy] shader zapasowy: " + (cachedShader != null ? cachedShader.name : "(brak)"));
             }
-            Material m;
             if (cachedShader != null)
             {
-                m = new Material(cachedShader);
+                var m = new Material(cachedShader);
                 m.color = c;
                 r.sharedMaterial = m;
-            }
-            else
-            {
-                m = r.material;
-                m.color = c;
             }
         }
 

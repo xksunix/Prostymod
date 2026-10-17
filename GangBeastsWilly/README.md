@@ -1,4 +1,4 @@
-# Gang Beasts Willy 1.0 (MelonLoader, IL2CPP)
+# Gang Beasts Willy 1.1 (MelonLoader, IL2CPP)
 
 Małe, kluskowate pisiorki z jajeczkami w kolorze danej postaci (bez żadnego sexu, czysty głupi humor), które bujają się na sprężynach, plus sikanie z kałużami.
 
@@ -20,4 +20,9 @@ Wrzuć `GangBeastsWilly.dll` do folderu `Mods` w katalogu gry (`...\Gang Beasts\
 | F9 | posprzątaj kałuże |
 | F10 | odwróć przód (jeśli pisiorek jest z tyłu) |
 
-Ustawienia: `UserData/MelonPreferences.cfg`, sekcja `GBWilly` (`Size`, `ForwardOffset`, `UpOffset`, `JiggleAmount`, `PeeSpeed`, `PeeSpread`, `PeeRate`, `MaxPuddles`).
+Ustawienia: `UserData/MelonPreferences.cfg`, sekcja `GBWilly2` (`Size`, `ForwardOffset`, `UpOffset`, `JiggleAmount`, `PeeSpeed`, `PeeSpread`, `PeeRate`, `MaxPuddles`).
+
+## Zmiany 1.1
+- Naprawione niewidoczne pisiorki (wcześniej chowały się w ciele postaci).
+- Klawisze czytane przez WinAPI, więc K/F6-F10 działają też gdy stary Input w grze nie działa.
+- Ustawienia są teraz w sekcji `GBWilly2` (nowe domyślne wartości).

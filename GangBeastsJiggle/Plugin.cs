@@ -6,7 +6,7 @@ using System.Text;
 using MelonLoader;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(GangBeastsJiggle.JiggleMod), "Gang Beasts Jiggle", "2.2.0", "xksunix")]
+[assembly: MelonInfo(typeof(GangBeastsJiggle.JiggleMod), "Gang Beasts Jiggle", "2.3.0", "xksunix")]
 
 namespace GangBeastsJiggle
 {
@@ -54,7 +54,7 @@ namespace GangBeastsJiggle
             try
             {
                 _logPath = Path.Combine(Directory.GetParent(Application.dataPath).FullName, "GangBeastsJiggle_log.txt");
-                File.WriteAllText(_logPath, "Gang Beasts Jiggle 2.2.0\r\n");
+                File.WriteAllText(_logPath, "Gang Beasts Jiggle 2.3.0\r\n");
             }
             catch { _logPath = null; }
             Log("Zaladowany. Log: " + _logPath);
@@ -98,28 +98,28 @@ namespace GangBeastsJiggle
             if (_keysBroken) return;
             try
             {
-                if (Input.GetKeyDown(KeyCode.F6))
+                if (PoopKeys.Down(KeyCode.F6))
                 {
                     Enabled.Value = !Enabled.Value;
                     Toast("Jiggle: " + (Enabled.Value ? "WLACZONY" : "WYLACZONY"));
                 }
-                if (Input.GetKeyDown(KeyCode.F7))
+                if (PoopKeys.Down(KeyCode.F7))
                 {
                     BaseScale.Value = Round(Mathf.Max(1f, BaseScale.Value - 0.1f));
                     Toast("Rozmiar (BaseScale): " + BaseScale.Value);
                 }
-                if (Input.GetKeyDown(KeyCode.F8))
+                if (PoopKeys.Down(KeyCode.F8))
                 {
                     BaseScale.Value = Round(Mathf.Min(4f, BaseScale.Value + 0.1f));
                     Toast("Rozmiar (BaseScale): " + BaseScale.Value);
                 }
-                if (Input.GetKeyDown(KeyCode.F9))
+                if (PoopKeys.Down(KeyCode.F9))
                 {
                     JiggleScale.Value = Round(Mathf.Max(0f, JiggleScale.Value - 0.1f));
                     PositionJiggle.Value = Round(Mathf.Max(0f, PositionJiggle.Value - 0.1f));
                     Toast("Sila drgan: " + JiggleScale.Value);
                 }
-                if (Input.GetKeyDown(KeyCode.F10))
+                if (PoopKeys.Down(KeyCode.F10))
                 {
                     JiggleScale.Value = Round(Mathf.Min(3f, JiggleScale.Value + 0.1f));
                     PositionJiggle.Value = Round(Mathf.Min(2f, PositionJiggle.Value + 0.1f));
@@ -285,6 +285,22 @@ namespace GangBeastsJiggle
     /// </summary>
     public class JiggleBone : MonoBehaviour
     {
+        internal static readonly List<JiggleBone> All = new List<JiggleBone>();
+        private float _shake, _shakeDur = 1f, _shakeForce = 1f;
+
+        internal static void ShakeAll(float dur, float force)
+        {
+            for (int i = 0; i < All.Count; i++)
+                if (All[i] != null) All[i].Shake(dur, force);
+        }
+
+        internal void Shake(float dur, float force)
+        {
+            _shakeDur = Mathf.Max(0.05f, dur);
+            _shake = _shakeDur;
+            _shakeForce = Mathf.Max(0f, force);
+        }
+
         private Vector3 _lastPos, _lastVel, _offset, _springVel;
         private Vector3 _origLocalScale, _origLocalPos;
         private Transform[] _kids = new Transform[0];
@@ -295,6 +311,7 @@ namespace GangBeastsJiggle
 
         private void OnEnable()
         {
+            if (!All.Contains(this)) All.Add(this);
             StartCoroutine(RestoreLoop());
         }
 
@@ -348,12 +365,24 @@ namespace GangBeastsJiggle
             Vector3 acc = (vel - _lastVel) / rawDt;
             _lastPos = pos; _lastVel = vel;
 
+            // pierdniecie: silne, szybkie wstrzasy pupy, slabnace do zera
+            float sk = 0f;
+            Vector3 shakeForce = Vector3.zero;
+            if (_shake > 0f)
+            {
+                _shake -= rawDt;
+                sk = Mathf.Clamp01(_shake / _shakeDur);
+                float ph = Time.time * 40f;
+                Vector3 sdir = new Vector3(Mathf.Sin(ph), 0.5f * Mathf.Sin(ph * 1.7f + 1f), Mathf.Cos(ph * 1.3f));
+                shakeForce = sdir * (_shakeForce * sk * 900f);
+            }
+
             float k = JiggleMod.Stiffness.Value;
             float c = JiggleMod.Damping.Value;
-            Vector3 force = -acc * 0.01f * JiggleMod.Reaction.Value - k * _offset - c * _springVel;
+            Vector3 force = -acc * 0.01f * JiggleMod.Reaction.Value - k * _offset - c * _springVel + shakeForce;
             _springVel += force * dt;
             _offset += _springVel * dt;
-            float max = Mathf.Max(0.01f, JiggleMod.MaxOffset.Value);
+            float max = Mathf.Max(0.01f, JiggleMod.MaxOffset.Value) * (1f + 2f * sk * _shakeForce);
             if (_offset.magnitude > max) _offset = _offset.normalized * max;
             if (float.IsNaN(_offset.x) || float.IsNaN(_offset.y) || float.IsNaN(_offset.z))
             {
@@ -381,8 +410,9 @@ namespace GangBeastsJiggle
             _origLocalPos = transform.localPosition;
 
             float s = Mathf.Max(0.1f, JiggleMod.BaseScale.Value + JiggleMod.JiggleScale.Value * _offset.magnitude);
+            if (sk > 0f) s *= 1f + 0.25f * sk * _shakeForce * (0.5f + 0.5f * Mathf.Sin(Time.time * 36f));
             transform.localScale = _origLocalScale * s;
-            transform.position = pos + _offset * JiggleMod.PositionJiggle.Value;
+            transform.position = pos + _offset * JiggleMod.PositionJiggle.Value * (1f + 2.5f * sk * _shakeForce);
 
             for (int i = 0; i < _kids.Length; i++)
             {
@@ -395,6 +425,7 @@ namespace GangBeastsJiggle
 
         private void OnDisable()
         {
+            All.Remove(this);
             Restore();
         }
     }

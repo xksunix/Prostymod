@@ -2,12 +2,57 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using MelonLoader;
 using UnityEngine;
 using UnityEngine.Rendering;
 
 namespace GangBeastsJiggle
 {
+    // ------------------------------------------------------------------
+    //  Klawisze przez WinAPI (stary Input w tej grze rzuca wyjatek)
+    // ------------------------------------------------------------------
+    internal static class WinKey
+    {
+        [DllImport("user32.dll")]
+        private static extern short GetAsyncKeyState(int vKey);
+
+        private class St { public int Frame = -1; public bool Now, Prev; }
+        private static readonly Dictionary<int, St> states = new Dictionary<int, St>();
+        private static int errors;
+
+        private static int Vk(KeyCode k)
+        {
+            int c = (int)k;
+            if (c >= (int)KeyCode.A && c <= (int)KeyCode.Z) return 0x41 + (c - (int)KeyCode.A);
+            if (c >= (int)KeyCode.Alpha0 && c <= (int)KeyCode.Alpha9) return 0x30 + (c - (int)KeyCode.Alpha0);
+            if (c >= (int)KeyCode.F1 && c <= (int)KeyCode.F12) return 0x70 + (c - (int)KeyCode.F1);
+            return 0;
+        }
+
+        private static St Get(KeyCode k)
+        {
+            int vk = Vk(k);
+            if (vk == 0) return null;
+            St s;
+            if (!states.TryGetValue(vk, out s)) { s = new St(); states[vk] = s; }
+            int frame = Time.frameCount;
+            if (s.Frame != frame)
+            {
+                s.Prev = s.Now;
+                s.Frame = frame;
+                bool now = false;
+                try { now = Application.isFocused && (GetAsyncKeyState(vk) & 0x8000) != 0; }
+                catch (Exception e) { if (errors++ < 5) MelonLogger.Error("[Keys] GetAsyncKeyState: " + e.Message); }
+                s.Now = now;
+            }
+            return s;
+        }
+
+        public static bool Held(KeyCode k) { var s = Get(k); return s != null && s.Now; }
+        public static bool Down(KeyCode k) { var s = Get(k); return s != null && s.Now && !s.Prev; }
+    }
+
     // ------------------------------------------------------------------
     //  Klawisze (przez refleksje: stary Input albo Input System - dziala w IL2CPP)
     // ------------------------------------------------------------------
@@ -26,6 +71,7 @@ namespace GangBeastsJiggle
         private static bool Query(KeyCode k, bool down)
         {
             if (mode == 0) Resolve();
+            if (mode == 4) return down ? WinKey.Down(k) : WinKey.Held(k);
             if (mode == 1)
             {
                 try
@@ -37,7 +83,7 @@ namespace GangBeastsJiggle
                 catch
                 {
                     fails++;
-                    if (fails >= 5) { fails = 0; mode = 0; Resolve(); }
+                    if (fails >= 3) { fails = 0; mode = 4; MelonLogger.Warning("[Keys] Stary Input nie dziala - klawisze przez WinAPI."); }
                     return false;
                 }
             }
@@ -95,18 +141,15 @@ namespace GangBeastsJiggle
                 if (tKeyboard != null) break;
             }
             if (tKeyboard != null) { mode = 2; MelonLogger.Msg("[Poop] klawisze: Input System"); }
-            else { mode = 3; MelonLogger.Warning("[Poop] Nie znaleziono systemu wejscia - klawisze nie beda dzialac."); }
+            else { mode = 4; MelonLogger.Msg("[Keys] klawisze: WinAPI"); }
         }
 
         private static string NewName(KeyCode k)
         {
-            switch (k)
-            {
-                case KeyCode.G: return "gKey";
-                case KeyCode.H: return "hKey";
-                case KeyCode.J: return "jKey";
-                default: return null;
-            }
+            string n = k.ToString();
+            if (n.Length == 1 && n[0] >= 'A' && n[0] <= 'Z') return char.ToLowerInvariant(n[0]) + "Key";
+            if (n.Length >= 2 && n[0] == 'F' && char.IsDigit(n[1])) return n.ToLowerInvariant() + "Key";
+            return null;
         }
 
         private static object Static(Type t, string name)
@@ -138,6 +181,7 @@ namespace GangBeastsJiggle
         public Component Actor;
         public Vector3 Pos, Back, Up, Vel;
         public float Unit = 0.4f;
+        public static int VisLayer = -1;
 
         private Transform hips, leftArm, rightArm, head;
         private Rigidbody hipsBody;
@@ -159,6 +203,15 @@ namespace GangBeastsJiggle
                 return null;
             }
             b.hipsBody = b.hips.GetComponent<Rigidbody>();
+            if (VisLayer < 0)
+            {
+                try
+                {
+                    var smr = actor.GetComponentInChildren<SkinnedMeshRenderer>();
+                    if (smr != null) VisLayer = smr.gameObject.layer;
+                }
+                catch { }
+            }
             var hc = b.head.GetComponent<Collider>();
             if (hc != null)
             {
@@ -279,6 +332,11 @@ namespace GangBeastsJiggle
         private static MelonPreferences_Entry<bool> PEnabled, PFlip;
         private static MelonPreferences_Entry<float> PBackOff, PUpOff, PSpeed, PSpread, PRate, PSize;
         private static MelonPreferences_Entry<int> PMaxSplats;
+        private static MelonPreferences_Entry<float> PFartVol, PFartShake;
+        private static MelonPreferences_Entry<string> PFartKeyName;
+        private static KeyCode fartKey = KeyCode.P;
+        private static AudioClip[] fartClips;
+        private static float nextFart;
 
         private const int MaxDrops = 700;
         private const float SplatThickness = 0.014f;
@@ -321,7 +379,12 @@ namespace GangBeastsJiggle
             PRate = cat.CreateEntry("Rate", 140f);
             PSize = cat.CreateEntry("Size", 1f);
             PMaxSplats = cat.CreateEntry("MaxSplats", 350);
-            log.Msg("Poop dodany do Jiggle: G (przytrzymaj) = kupa i sraczka, H = odwroc kierunek, J = posprzataj.");
+            PFartKeyName = cat.CreateEntry("FartKey", "P");
+            PFartVol = cat.CreateEntry("FartVolume", 1f);
+            PFartShake = cat.CreateEntry("FartShake", 1f);
+            try { fartKey = (KeyCode)Enum.Parse(typeof(KeyCode), PFartKeyName.Value, true); }
+            catch { fartKey = KeyCode.P; }
+            log.Msg("Poop dodany do Jiggle: G (przytrzymaj) = kupa i sraczka, P (przytrzymaj) = pierdzenie, H = odwroc kierunek, J = posprzataj.");
         }
 
         public static void SceneLoaded()
@@ -371,6 +434,10 @@ namespace GangBeastsJiggle
                     }
                 }
                 if (dead != null) foreach (var k in dead) butts.Remove(k);
+
+                // P = pierdzenie (dzwiek + mocne trzesienie pupy); przytrzymanie powtarza
+                if (PoopKeys.Down(fartKey)) { Fart(); nextFart = Time.time + UnityEngine.Random.Range(0.55f, 0.9f); }
+                else if (PoopKeys.Held(fartKey) && Time.time >= nextFart) { Fart(); nextFart = Time.time + UnityEngine.Random.Range(0.45f, 0.85f); }
 
                 bool down = PoopKeys.Down(KeyCode.G);
                 bool held = PoopKeys.Held(KeyCode.G);
@@ -442,6 +509,106 @@ namespace GangBeastsJiggle
                     log.Error("[Poop] Blad skanowania postaci (kolejne takie same pomijam): " + e);
                 }
             }
+        }
+
+        // ---------- Pierdzenie ----------
+
+        private static void Fart()
+        {
+            try
+            {
+                EnsureClips();
+                int n = Mathf.Max(1, butts.Count);
+                float vol = Mathf.Clamp(PFartVol.Value / Mathf.Sqrt(n), 0.15f, 1f);
+                for (int i = 0; i < n; i++) PlayFart(vol);
+                JiggleBone.ShakeAll(1.2f, PFartShake.Value);
+            }
+            catch (Exception e) { if (JiggleMod.Instance != null) JiggleMod.Instance.Fail("Fart", e); }
+        }
+
+        private static void PlayFart(float vol)
+        {
+            if (fartClips == null || fartClips.Length == 0) return;
+            var clip = fartClips[UnityEngine.Random.Range(0, fartClips.Length)];
+            if (clip == null) return;
+            var go = new GameObject("GBFart");
+            var src = go.AddComponent<AudioSource>();
+            src.clip = clip;
+            src.volume = vol;
+            src.spatialBlend = 0f;
+            src.playOnAwake = false;
+            src.pitch = UnityEngine.Random.Range(0.85f, 1.2f);
+            src.Play();
+            UnityEngine.Object.Destroy(go, clip.length / src.pitch + 0.4f);
+        }
+
+        private static void EnsureClips()
+        {
+            if (fartClips != null) return;
+            var list = new List<AudioClip>();
+            for (int i = 0; i < 5; i++)
+            {
+                try
+                {
+                    var c = MakeFart(i);
+                    if (c != null) list.Add(c);
+                }
+                catch (Exception e) { log.Error("[Fart] nie udalo sie wygenerowac dzwieku " + i + ": " + e.Message); }
+            }
+            fartClips = list.ToArray();
+            log.Msg("[Fart] wygenerowano dzwiekow: " + fartClips.Length);
+        }
+
+        // Dzwiek generowany w kodzie: brzeczacy puls o falujacej wysokosci, przerywany, z szumem i zanikaniem
+        private static AudioClip MakeFart(int variant)
+        {
+            const int rate = 22050;
+            var rnd = new System.Random(1234 + variant * 77);
+            float dur = 0.5f + 0.9f * (float)rnd.NextDouble();
+            int n = (int)(dur * rate);
+            float[] d = new float[n];
+            float f0 = 55f + 70f * (float)rnd.NextDouble();
+            float wobHz = 3f + 9f * (float)rnd.NextDouble();
+            float wobAmt = 0.15f + 0.35f * (float)rnd.NextDouble();
+            float flutterHz = 18f + 40f * (float)rnd.NextDouble();
+            float duty = 0.18f + 0.3f * (float)rnd.NextDouble();
+            float slide = (variant % 2 == 0) ? 0.6f : -0.25f;
+            float phase = 0f, lp = 0f;
+            for (int i = 0; i < n; i++)
+            {
+                float t = i / (float)rate;
+                float k = t / dur;
+                float env = Mathf.Min(1f, t * 40f) * Mathf.Pow(Mathf.Max(0f, 1f - k), 0.7f);
+                float freq = f0 * (1f + wobAmt * Mathf.Sin(6.2831853f * wobHz * t)) * (1f + slide * (1f - k));
+                phase += freq / rate;
+                if (phase >= 1f) phase -= 1f;
+                float pulse = phase < duty ? 1f : -0.6f;
+                float flutter = 0.55f + 0.45f * Mathf.Sign(Mathf.Sin(6.2831853f * flutterHz * t * (1f + 0.3f * k)));
+                float noise = ((float)rnd.NextDouble() * 2f - 1f) * 0.35f;
+                float x = (pulse * 0.7f + noise) * flutter * env;
+                lp += 0.28f * (x - lp);
+                d[i] = Mathf.Clamp(lp * 1.6f, -0.95f, 0.95f);
+            }
+            var clip = AudioClip.Create("GBFart" + variant, n, 1, rate, false);
+            SetClipData(clip, d);
+            return clip;
+        }
+
+        // AudioClip.SetData(float[], int) - przez refleksje, bo w IL2CPP argument ma inny typ tablicy
+        private static void SetClipData(AudioClip clip, float[] data)
+        {
+            MethodInfo m = null;
+            foreach (var mi in typeof(AudioClip).GetMethods(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (mi.Name != "SetData") continue;
+                var ps = mi.GetParameters();
+                if (ps.Length == 2 && ps[1].ParameterType == typeof(int)) { m = mi; break; }
+            }
+            if (m == null) throw new Exception("brak AudioClip.SetData");
+            object arg = data;
+            Type pt = m.GetParameters()[0].ParameterType;
+            if (!pt.IsInstanceOfType(data)) arg = Activator.CreateInstance(pt, new object[] { data });
+            m.Invoke(clip, new object[] { arg, 0 });
         }
 
         // ---------- Kupa (kopczyk) ----------
@@ -618,11 +785,13 @@ namespace GangBeastsJiggle
             go.name = name;
             var col = go.GetComponent<Collider>();
             if (col != null) UnityEngine.Object.DestroyImmediate(col);
+            if (Butt.VisLayer >= 0) go.layer = Butt.VisLayer;
             var r = go.GetComponent<Renderer>();
             if (r != null)
             {
                 r.shadowCastingMode = ShadowCastingMode.Off;
                 r.receiveShadows = false;
+                r.enabled = true;
                 Colorize(r, c);
             }
             return go;
@@ -630,28 +799,34 @@ namespace GangBeastsJiggle
 
         private static void Colorize(Renderer r, Color c)
         {
+            // 1) domyslny material prymitywu - zawsze obecny w grze
+            try
+            {
+                Material dm = r.material;
+                if (dm != null && dm.shader != null && dm.shader.isSupported)
+                {
+                    dm.color = c;
+                    return;
+                }
+            }
+            catch { }
+            // 2) zapasowy shader, tylko taki ktory gra obsluguje
             if (!litSearched)
             {
                 litSearched = true;
-                string[] names = { "Legacy Shaders/Diffuse", "Mobile/Diffuse", "Standard", "Unlit/Color", "Sprites/Default" };
+                string[] names = { "Unlit/Color", "Sprites/Default", "Standard", "Legacy Shaders/Diffuse", "Mobile/Diffuse" };
                 foreach (var n in names)
                 {
                     var sh = Shader.Find(n);
-                    if (sh != null) { litShader = sh; break; }
+                    if (sh != null && sh.isSupported) { litShader = sh; break; }
                 }
-                MelonLogger.Msg("[Poop] shader: " + (litShader != null ? litShader.name : "(brak - domyslny material)"));
+                MelonLogger.Msg("[Poop] shader zapasowy: " + (litShader != null ? litShader.name : "(brak)"));
             }
-            Material m;
             if (litShader != null)
             {
-                m = new Material(litShader);
+                var m = new Material(litShader);
                 m.color = c;
                 r.sharedMaterial = m;
-            }
-            else
-            {
-                m = r.material;
-                m.color = c;
             }
         }
 
