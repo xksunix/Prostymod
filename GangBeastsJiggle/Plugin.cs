@@ -6,7 +6,7 @@ using System.Text;
 using MelonLoader;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(GangBeastsJiggle.JiggleMod), "Gang Beasts Jiggle", "2.1.0", "xksunix")]
+[assembly: MelonInfo(typeof(GangBeastsJiggle.JiggleMod), "Gang Beasts Jiggle", "2.2.0", "xksunix")]
 
 namespace GangBeastsJiggle
 {
@@ -54,10 +54,17 @@ namespace GangBeastsJiggle
             try
             {
                 _logPath = Path.Combine(Directory.GetParent(Application.dataPath).FullName, "GangBeastsJiggle_log.txt");
-                File.WriteAllText(_logPath, "Gang Beasts Jiggle 2.1.0\r\n");
+                File.WriteAllText(_logPath, "Gang Beasts Jiggle 2.2.0\r\n");
             }
             catch { _logPath = null; }
             Log("Zaladowany. Log: " + _logPath);
+            try { PoopFeature.Init(LoggerInstance); }
+            catch (Exception e) { Fail("PoopInit", e); }
+        }
+
+        public override void OnSceneWasLoaded(int buildIndex, string sceneName)
+        {
+            try { PoopFeature.SceneLoaded(); } catch { }
         }
 
         internal void Log(string msg)
@@ -147,6 +154,7 @@ namespace GangBeastsJiggle
 
         public override void OnUpdate()
         {
+            PoopFeature.Tick();
             HandleKeys();
             if (!Enabled.Value || Time.unscaledTime < _nextScan) return;
             _nextScan = Time.unscaledTime + 2f;

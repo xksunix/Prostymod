@@ -7,3 +7,8 @@
 
 ## Klawisze w grze
 F6 wlacz/wylacz, F7/F8 rozmiar -/+, F9/F10 sila drgan -/+ (ustawienia zapisuja sie przy wyjsciu z gry).
+
+## Kupa i sraczka (od wersji 2.2)
+**G (przytrzymaj)** – każda postać robi kupę (kopczyk za nią) i puszcza fontannę sraczki do tyłu. Plamy zostają na podłodze i się rozlewają.
+**H** – odwróć kierunek (jeśli leci do przodu zamiast do tyłu), **J** – posprzątaj.
+Ustawienia: `UserData/MelonPreferences.cfg`, sekcja `GBPoop` (`BackOffset`, `UpOffset`, `Speed`, `Spread`, `Rate`, `Size`, `MaxSplats`).
