@@ -1,0 +1,31 @@
+name: Build Gang Beasts Willy
+on:
+  push:
+    paths:
+      - 'GangBeastsWilly/**'
+      - '.github/workflows/gangbeasts-willy.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - run: dotnet build GangBeastsWilly/GangBeastsWilly.csproj -c Release -o out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GangBeastsWilly-dll
+          path: out/GangBeastsWilly.dll
+      - name: Commit DLL to dist/
+        run: |
+          mkdir -p dist
+          cp out/GangBeastsWilly.dll dist/GangBeastsWilly.dll
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add dist/GangBeastsWilly.dll
+          git commit -m "Build GangBeastsWilly.dll [skip ci]" || echo "no changes"
+          git push
