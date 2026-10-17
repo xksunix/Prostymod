@@ -150,8 +150,11 @@ namespace GBWilly
         private Transform hips, leftArm, rightArm, head;
         private Rigidbody hipsBody;
         private GameObject root;
-        private Transform shaft, glans, ballL, ballR;
+        private Transform shaft, ballL, ballR;
         private float unit = 0.4f;
+        private Color bodyColor = new Color(0.9f, 0.7f, 0.6f);
+        private bool colorFound;
+        private Material srcMat;
 
         private Vector3 tip, tipV, bl, blV, br, brV;
         private bool init;
@@ -187,6 +190,9 @@ namespace GBWilly
                 if (d > 0.05f && d < 3f) w.unit = d;
             }
 
+            try { w.SampleBody(top, log); }
+            catch (Exception e) { log.Warning("Nie udalo sie odczytac koloru postaci: " + e.Message); }
+
             try { w.Build(); }
             catch (Exception e)
             {
@@ -201,16 +207,13 @@ namespace GBWilly
         private void Build()
         {
             root = new GameObject("GBWilly");
-            Color skin = new Color(1f, 0.72f, 0.62f);
-            Color tipC = new Color(0.95f, 0.5f, 0.5f);
-            Color ballC = new Color(0.93f, 0.63f, 0.55f);
-            shaft = Prim("Shaft", PrimitiveType.Cylinder, skin);
-            glans = Prim("Glans", PrimitiveType.Sphere, tipC);
-            ballL = Prim("BallL", PrimitiveType.Sphere, ballC);
-            ballR = Prim("BallR", PrimitiveType.Sphere, ballC);
+            // kolor i material takie jak ciasto postaci - mala "kluseczka" w stylu Gang Beasts
+            shaft = Prim("Nub", PrimitiveType.Capsule, 1.0f);
+            ballL = Prim("BallL", PrimitiveType.Sphere, 0.94f);
+            ballR = Prim("BallR", PrimitiveType.Sphere, 0.94f);
         }
 
-        private Transform Prim(string name, PrimitiveType type, Color c)
+        private Transform Prim(string name, PrimitiveType type, float tone)
         {
             var go = GameObject.CreatePrimitive(type);
             go.name = name;
@@ -221,10 +224,61 @@ namespace GBWilly
             if (r != null)
             {
                 r.shadowCastingMode = ShadowCastingMode.Off;
-                r.receiveShadows = false;
-                WillyMod.Colorize(r, c);
+                r.receiveShadows = true;
+                if (colorFound)
+                    WillyMod.ColorizeLit(r, new Color(bodyColor.r * tone, bodyColor.g * tone, bodyColor.b * tone));
+                else if (srcMat != null)
+                    r.sharedMaterial = new Material(srcMat);
+                else
+                    WillyMod.ColorizeLit(r, new Color(0.9f * tone, 0.7f * tone, 0.6f * tone));
             }
             return go.transform;
+        }
+
+        // Kolor postaci: bierzemy z materialu jej siatki (tulow/biodra), zeby pisiorek pasowal do gracza
+        private void SampleBody(Transform top, MelonLogger.Instance log)
+        {
+            Renderer best = null;
+            int bestScore = -1;
+            string bestName = "";
+            var q = new Queue<Transform>();
+            q.Enqueue(top);
+            int guard = 0;
+            while (q.Count > 0 && guard++ < 600)
+            {
+                var t = q.Dequeue();
+                for (int i = 0; i < t.childCount; i++) q.Enqueue(t.GetChild(i));
+                string n = t.name.ToLowerInvariant();
+                if (n.StartsWith("gb") || n.Contains("mouth") || n.Contains("brow") || n.Contains("tongue") || n.Contains("teeth") || n.Contains("lip")) continue;
+                var r = t.GetComponent<Renderer>();
+                if (r == null) continue;
+                int score = 0;
+                if (n.Contains("chest") || n.Contains("torso") || n.Contains("body")) score = 5;
+                else if (n.Contains("hips") || n.Contains("pelvis")) score = 4;
+                else if (n.Contains("arm") || n.Contains("hand") || n.Contains("leg") || n.Contains("foot")) score = 2;
+                else if (n.Contains("head")) score = 1;
+                else if (n.Contains("skin") || n.Contains("mesh")) score = 1;
+                if (score > bestScore) { bestScore = score; best = r; bestName = t.name; }
+            }
+            if (best == null) { log.Warning("Nie znaleziono siatki postaci - pisiorek dostanie domyslny kolor."); return; }
+
+            Material m = best.sharedMaterial;
+            if (m == null) return;
+            string[] props = { "_Color", "_BaseColor", "_MainColor", "_TintColor", "_Tint", "_SkinColor", "_Albedo" };
+            foreach (var pn in props)
+            {
+                bool has;
+                try { has = m.HasProperty(pn); } catch { has = false; }
+                if (!has) continue;
+                Color c = m.GetColor(pn);
+                if (c.r > 0.95f && c.g > 0.95f && c.b > 0.95f) continue;   // biel = kolor z tekstury, nie z parametru
+                bodyColor = c;
+                colorFound = true;
+                log.Msg("Kolor postaci z '" + bestName + "' (" + pn + "): " + c.r.ToString("0.00") + ", " + c.g.ToString("0.00") + ", " + c.b.ToString("0.00"));
+                return;
+            }
+            srcMat = m;
+            log.Msg("Kolor postaci z '" + bestName + "': brak prostego parametru koloru - kopiuje material siatki (" + m.name + ").");
         }
 
         public bool IsAlive()
@@ -262,9 +316,9 @@ namespace GBWilly
             lift = Mathf.Lerp(lift, Peeing ? 1f : 0f, Mathf.Clamp01(dt * 8f));
             Vector3 down = -upv;
 
-            Vector3 tipRest = b + fwd * (0.30f * u * (1f + 0.6f * lift)) + down * (0.26f * u * (1f - lift)) + upv * (0.04f * u * lift);
-            Vector3 blRest = b + down * (0.13f * u) - side * (0.085f * u) + fwd * (0.02f * u);
-            Vector3 brRest = b + down * (0.13f * u) + side * (0.085f * u) + fwd * (0.02f * u);
+            Vector3 tipRest = b + fwd * (0.17f * u * (1f + 0.7f * lift)) + down * (0.15f * u * (1f - lift)) + upv * (0.03f * u * lift);
+            Vector3 blRest = b + down * (0.11f * u) - side * (0.08f * u) + fwd * (0.02f * u);
+            Vector3 brRest = b + down * (0.11f * u) + side * (0.08f * u) + fwd * (0.02f * u);
 
             if (!init)
             {
@@ -280,23 +334,20 @@ namespace GBWilly
             Spring(ref br, ref brV, brRest, 130f * jig, 6f / Mathf.Sqrt(jig), sdt);
 
             // nie pozwol odleciec za daleko od podstawy (np. po teleportacji postaci)
-            tip = ClampFrom(b, tip, 0.65f * u);
+            tip = ClampFrom(b, tip, 0.45f * u);
             bl = ClampFrom(b, bl, 0.35f * u);
             br = ClampFrom(b, br, 0.35f * u);
 
             Vector3 dv = tip - b;
-            float len = Mathf.Max(0.02f * u, dv.magnitude);
-            Vector3 dir = dv / len;
-            float th = 0.13f * u;
+            float th = 0.17f * u;
+            float len = Mathf.Max(th, dv.magnitude + th * 0.5f);
+            Vector3 dir = dv.sqrMagnitude > 1e-8f ? dv.normalized : fwd;
 
             shaft.position = (b + tip) * 0.5f;
             shaft.rotation = Quaternion.FromToRotation(Vector3.up, dir);
             shaft.localScale = new Vector3(th, len * 0.5f, th);
 
-            glans.position = tip;
-            glans.localScale = Vector3.one * (th * 1.35f);
-
-            float bd = 0.2f * u;
+            float bd = 0.17f * u;
             ballL.position = bl;
             ballL.localScale = Vector3.one * bd;
             ballR.position = br;
@@ -769,6 +820,37 @@ namespace GBWilly
             if (cachedShader != null)
             {
                 m = new Material(cachedShader);
+                m.color = c;
+                r.sharedMaterial = m;
+            }
+            else
+            {
+                m = r.material;
+                m.color = c;
+            }
+        }
+
+        private static Shader litShader;
+        private static bool litSearched;
+
+        // Material z cieniowaniem (zeby pisiorek byl "okragly" jak reszta gry); w razie braku - plaski kolor
+        internal static void ColorizeLit(Renderer r, Color c)
+        {
+            if (!litSearched)
+            {
+                litSearched = true;
+                string[] names = { "Legacy Shaders/Diffuse", "Mobile/Diffuse", "Standard", "Unlit/Color", "Sprites/Default" };
+                foreach (var n in names)
+                {
+                    var sh = Shader.Find(n);
+                    if (sh != null) { litShader = sh; break; }
+                }
+                MelonLogger.Msg("[Willy] shader pisiorka: " + (litShader != null ? litShader.name : "(brak - domyslny material)"));
+            }
+            Material m;
+            if (litShader != null)
+            {
+                m = new Material(litShader);
                 m.color = c;
                 r.sharedMaterial = m;
             }

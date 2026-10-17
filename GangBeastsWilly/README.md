@@ -1,6 +1,6 @@
 # Gang Beasts Willy 1.0 (MelonLoader, IL2CPP)
 
-Małe, kreskówkowe pisiorki z jajeczkami (bez żadnego sexu, czysty głupi humor), które bujają się na sprężynach, plus sikanie z kałużami.
+Małe, kluskowate pisiorki z jajeczkami w kolorze danej postaci (bez żadnego sexu, czysty głupi humor), które bujają się na sprężynach, plus sikanie z kałużami.
 
 ## Instalacja
 Wrzuć `GangBeastsWilly.dll` do folderu `Mods` w katalogu gry (`...\Gang Beasts\Mods`) i uruchom grę.
