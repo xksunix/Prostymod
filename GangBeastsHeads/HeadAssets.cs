@@ -24,7 +24,9 @@ namespace GBHeads
         public int Bite = -1;
         public readonly List<int> Talk = new List<int>();
 
-        public Material HeadMat, TeethMat, TongueMat;
+        public Material HeadMat, TeethMat, TongueMat, LidMat;
+        public Color LidColor = new Color(0.85f, 0.65f, 0.55f);
+        private Vector3[] _pos; private Vector2[] _uv;
         public readonly List<string> ShaderNames = new List<string>();
         public int ShaderSel;
 
@@ -125,6 +127,7 @@ namespace GBHeads
                 new Vector3(LM[5], LM[6], LM[7])
             };
 
+            _pos = pos; _uv = uv;
             Main = MakeMesh("GBHeadMain", pos, nrm, uv, w, tris, bonePos);
             Dark = MakeMesh("GBHeadMouth", dpos, dnrm, duv, dw, dtris, bonePos);
 
@@ -145,7 +148,16 @@ namespace GBHeads
             if (!Il2.SetArr(m, "vertices", v)) throw new Exception("Mesh.vertices");
             Il2.SetArr(m, "normals", n);
             Il2.SetArr(m, "uv", uv);
-            if (!Il2.SetArr(m, "triangles", tris)) throw new Exception("Mesh.triangles");
+            // siatka dwustronna: doklejamy odwrocone trojkaty (zadnych dziur niezaleznie od cullingu shadera)
+            var both = new int[tris.Length * 2];
+            Array.Copy(tris, both, tris.Length);
+            for (int i = 0; i + 2 < tris.Length; i += 3)
+            {
+                both[tris.Length + i] = tris[i];
+                both[tris.Length + i + 1] = tris[i + 2];
+                both[tris.Length + i + 2] = tris[i + 1];
+            }
+            if (!Il2.SetArr(m, "triangles", both)) throw new Exception("Mesh.triangles");
 
             var white = new Color32[v.Length];
             for (int i = 0; i < white.Length; i++) white[i] = new Color32(255, 255, 255, 255);
@@ -181,7 +193,7 @@ namespace GBHeads
             var wt = new float[4];
             for (int i = 0; i < n; i++)
             {
-                float j = w[i * 3] / 255f, a = w[i * 3 + 1] / 255f, b = w[i * 3 + 2] / 255f;
+                float j = w[i * 3] / 255f, a = 0f, b = 0f;      // powieki to osobne nakladki, siatka rusza sie tylko szczeka
                 if (j < 0.004f && a < 0.004f && b < 0.004f) { arr.SetValue(def, i); continue; }
                 float s = j + a + b;
                 if (s > 1f) { j /= s; a /= s; b /= s; s = 1f; }
@@ -254,6 +266,36 @@ namespace GBHeads
             tex.wrapMode = TextureWrapMode.Clamp;
             Tex = tex;
             TexOk = true;
+            try { LidColor = SampleSkin(rgba, w, h); }
+            catch (Exception e) { MelonLogger.Warning("[Heads] kolor powiek: " + e.Message); }
+        }
+
+        // kolor skory nad oczami (do powiek)
+        private Color SampleSkin(byte[] rgba, int w, int h)
+        {
+            float r = 0, g = 0, b = 0; int n = 0;
+            for (int e = 0; e < 2; e++)
+            {
+                int o = e == 0 ? 2 : 5;
+                Vector3 p = new Vector3(LM[o], LM[o + 1] + 0.05f, LM[o + 2]);
+                int best = -1; float bd = 1e9f;
+                for (int i = 0; i < _pos.Length; i++)
+                {
+                    float d = (_pos[i] - p).sqrMagnitude;
+                    if (d < bd) { bd = d; best = i; }
+                }
+                if (best < 0) continue;
+                int cx = (int)(_uv[best].x * w), cy = (int)(_uv[best].y * h);
+                for (int dy = -3; dy <= 3; dy++)
+                    for (int dx = -3; dx <= 3; dx++)
+                    {
+                        int x = Mathf.Clamp(cx + dx, 0, w - 1), y = Mathf.Clamp(cy + dy, 0, h - 1);
+                        int k = (y * w + x) * 4;
+                        r += rgba[k]; g += rgba[k + 1]; b += rgba[k + 2]; n++;
+                    }
+            }
+            if (n == 0) return LidColor;
+            return new Color(r / n / 255f * 0.96f, g / n / 255f * 0.96f, b / n / 255f * 0.96f, 1f);
         }
 
         // ---------- Dzwieki ----------
@@ -412,6 +454,7 @@ namespace GBHeads
             HeadMat = MakeMat(sh, TexOk ? Color.white : new Color(0.8f, 0.6f, 0.5f), TexOk ? Tex : null);
             TeethMat = MakeMat(sh, new Color(0.93f, 0.92f, 0.86f), null);
             TongueMat = MakeMat(sh, new Color(0.84f, 0.27f, 0.33f), null);
+            LidMat = MakeMat(sh, LidColor, null);
         }
 
         private static Material MakeMat(Shader sh, Color c, Texture tex)

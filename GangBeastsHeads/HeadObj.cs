@@ -18,8 +18,12 @@ namespace GBHeads
         public Vector2 Vp = new Vector2(0.5f, 0.75f);     // docelowy punkt na ekranie (viewport)
         public int SpeakingClip = -1;
 
-        private Transform rootT, modelT, jawT, lidAT, lidBT, teethT, tongueT, tipT;
-        private Renderer mainR, darkR, teethR, tongueR, tipR;
+        private Transform rootT, modelT, jawT, lidAT, lidBT, teethT, tongueT, tipT, capAT, capBT;
+        private Renderer mainR, darkR, teethR, tongueR, tipR, capAR, capBR;
+        private Rigidbody rb;
+        private SphereCollider col;
+        private readonly List<Collider> vCols = new List<Collider>();
+        private int baseLayer = -1;
         private AudioSource audio;
         private Vector3 eyeA, eyeB, mouthLocal;
 
@@ -95,6 +99,12 @@ namespace GBHeads
             teethT.localScale = new Vector3(0.20f, 0.04f, 0.07f);
             teethR.enabled = false;
 
+            // powieki: skorzane nakladki, ktore zjezdzaja na oczy przy mruganiu
+            capAR = Prim("LidCapA", modelT, A.LidMat, out capAT);
+            capBR = Prim("LidCapB", modelT, A.LidMat, out capBT);
+            capAT.localPosition = eyeA; capBT.localPosition = eyeB;
+            capAR.enabled = false; capBR.enabled = false;
+
             // jezyk (do lapania ofiary)
             tongueR = Prim("Tongue", rootT, A.TongueMat, out tongueT);
             tipR = Prim("TongueTip", rootT, A.TongueMat, out tipT);
@@ -118,6 +128,27 @@ namespace GBHeads
             Camera cam = M.Cam;
             if (cam != null) rot = Quaternion.LookRotation((cam.transform.position - pos).normalized, cam.transform.up);
             rootT.rotation = rot;
+
+            // prawdziwy obiekt fizyczny: collider + rigidbody (bez grawitacji, sterowany predkoscia)
+            try
+            {
+                col = Root.AddComponent<SphereCollider>();
+                col.radius = 0.42f * M.HeadWorld;
+                rb = Root.AddComponent<Rigidbody>();
+                rb.useGravity = false;
+                rb.mass = 6f;
+                rb.drag = 0f;
+                rb.angularDrag = 0f;
+                rb.freezeRotation = true;
+                rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+                rb.interpolation = RigidbodyInterpolation.Interpolate;
+                rb.velocity = Vector3.zero;
+            }
+            catch (Exception e)
+            {
+                MelonLogger.Warning("[Heads] fizyka glowy nie zadzialala (glowa bez kolizji): " + e.Message);
+                rb = null;
+            }
         }
 
         private void BuildSkinned(GameObject model)
@@ -186,12 +217,15 @@ namespace GBHeads
                 if (teethR != null) teethR.sharedMaterial = A.TeethMat;
                 if (tongueR != null) tongueR.sharedMaterial = A.TongueMat;
                 if (tipR != null) tipR.sharedMaterial = A.TongueMat;
+                if (capAR != null) capAR.sharedMaterial = A.LidMat;
+                if (capBR != null) capBR.sharedMaterial = A.LidMat;
             }
             catch { }
         }
 
         public void Destroy()
         {
+            RestoreCollisions();
             try { if (Root != null) UnityEngine.Object.Destroy(Root); } catch { }
             Root = null;
         }
@@ -229,6 +263,15 @@ namespace GBHeads
             float ms = hw / Mathf.Max(0.1f, A.LM[14]);
             modelT.localScale = Vector3.one * ms;
             Vector3 mouthOff = mouthLocal * ms;
+
+            if (col != null) col.radius = 0.42f * hw;
+            if (rb != null)
+            {
+                pos = rootT.position;
+                vel = rb.velocity;
+                int al = M.ActorLayer;
+                if (al >= 0 && al != baseLayer) { baseLayer = al; Root.layer = al; }
+            }
 
             Transform ct = cam.transform;
             Vector3 camPos = ct.position, camUp = ct.up, camRight = ct.right;
@@ -277,9 +320,10 @@ namespace GBHeads
             }
             Vector3 acc = (goal - pos) * (omega * omega) - vel * (2f * omega);
             vel += acc * dt;
-            float maxV = 14f * Mathf.Max(0.5f, hw);
+            float maxV = (st == St.Fly ? 9f : 14f) * Mathf.Max(0.5f, hw);
             if (vel.magnitude > maxV) vel = vel.normalized * maxV;
-            pos += vel * dt;
+            if (rb != null) rb.velocity = vel;
+            else pos += vel * dt;
 
             // ----- maszyna stanow ataku -----
             Vector3 mouthW = pos + rot * mouthOff;
@@ -309,7 +353,8 @@ namespace GBHeads
             }
 
             // ----- ustawienie obiektu -----
-            rootT.position = pos + camUp * (Mathf.Sin(t * 1.6f + bobPhase) * 0.04f * hw);
+            if (rb == null) rootT.position = pos;
+            modelT.localPosition = Vector3.up * (Mathf.Sin(t * 1.6f + bobPhase) * 0.02f);
             rootT.rotation = rot;
 
             // ----- rozmowa -----
@@ -352,9 +397,14 @@ namespace GBHeads
                 }
             }
             blink = Mathf.Clamp01(blink);
-            float drop = A.LM[8] * blink;
-            lidAT.localPosition = eyeA + Vector3.down * drop;
-            lidBT.localPosition = eyeB + Vector3.down * drop;
+            float capH = 0.115f * blink;
+            bool capOn = blink > 0.03f;
+            if (capAR != null)
+            {
+                capAR.enabled = capOn; capBR.enabled = capOn;
+                capAT.localScale = new Vector3(0.27f, capH, 0.09f);
+                capBT.localScale = new Vector3(0.27f, capH, 0.09f);
+            }
 
             // ----- jezyk -----
             if (tongueLen > 0.02f && st != St.Fly && VictimValid())
@@ -392,6 +442,29 @@ namespace GBHeads
             stT = 0f;
             tongueLen = 0f;
             vRbs.Clear();
+            vCols.Clear();
+            try
+            {
+                if (col != null && v.Top != null)
+                {
+                    Il2.CollectColliders(v.Top, vCols);
+                    for (int i = 0; i < vCols.Count; i++)
+                        if (vCols[i] != null) Physics.IgnoreCollision(col, vCols[i], true);
+                }
+            }
+            catch { }
+        }
+
+        private void RestoreCollisions()
+        {
+            try
+            {
+                if (col != null)
+                    for (int i = 0; i < vCols.Count; i++)
+                        if (vCols[i] != null) Physics.IgnoreCollision(col, vCols[i], false);
+            }
+            catch { }
+            vCols.Clear();
         }
 
         private void GatherBodies()
@@ -443,6 +516,7 @@ namespace GBHeads
 
         private void EndAttack()
         {
+            RestoreCollisions();
             st = St.Fly;
             stT = 0f;
             victim = null;

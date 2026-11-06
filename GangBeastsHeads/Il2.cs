@@ -125,6 +125,21 @@ namespace GBHeads
             return null;
         }
 
+        public static void CollectColliders(Transform top, List<Collider> list)
+        {
+            var q = new Queue<Transform>();
+            q.Enqueue(top);
+            int guard = 0;
+            while (q.Count > 0 && guard++ < 700)
+            {
+                var t = q.Dequeue();
+                Collider c = null;
+                try { c = t.GetComponent<Collider>(); } catch { }
+                if (c != null) list.Add(c);
+                for (int i = 0; i < t.childCount; i++) q.Enqueue(t.GetChild(i));
+            }
+        }
+
         public static void CollectBodies(Transform top, List<Rigidbody> list)
         {
             var q = new Queue<Transform>();

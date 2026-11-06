@@ -4,7 +4,7 @@ using System.Reflection;
 using MelonLoader;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(GBHeads.HeadsMod), "Gang Beasts Flying Heads", "1.0.0", "Claude")]
+[assembly: MelonInfo(typeof(GBHeads.HeadsMod), "Gang Beasts Flying Heads", "1.1.0", "Claude")]
 
 namespace GBHeads
 {
@@ -41,6 +41,16 @@ namespace GBHeads
         private string shaderLabel = "";
 
         internal Camera Cam { get { return cam; } }
+        // warstwa fizyki postaci - glowy uzywaja jej, zeby zderzac sie z postaciami i mapa tak samo jak one
+        internal int ActorLayer
+        {
+            get
+            {
+                foreach (var a in actors)
+                    if (a.Hips != null) { try { return a.Hips.gameObject.layer; } catch { } }
+                return -1;
+            }
+        }
         internal float Depth = 12f;
         internal float CharH = 1.7f;
         internal float HeadWorld { get { return CharH * Mathf.Clamp(PSize.Value, 0.2f, 4f); } }
