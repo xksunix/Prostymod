@@ -1,0 +1,32 @@
+name: Build Gang Beasts Pigeons
+on:
+  push:
+    paths:
+      - 'GangBeastsPigeons/**'
+      - '.github/workflows/gangbeasts-pigeons.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - run: dotnet build GangBeastsPigeons/GangBeastsPigeons.csproj -c Release -o out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GangBeastsPigeons-dll
+          path: out/GangBeastsPigeons.dll
+      - name: Commit DLL to dist/
+        run: |
+          mkdir -p dist
+          cp out/GangBeastsPigeons.dll dist/GangBeastsPigeons.dll
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add dist/GangBeastsPigeons.dll
+          git commit -m "Build GangBeastsPigeons.dll [skip ci]" || echo "no changes"
+          git pull --rebase origin main || true
+          git push
