@@ -4,7 +4,7 @@ using System.Reflection;
 using MelonLoader;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(GBHeads.HeadsMod), "Gang Beasts Flying Heads", "1.1.0", "Claude")]
+[assembly: MelonInfo(typeof(GBHeads.HeadsMod), "Gang Beasts Flying Heads", "1.2.0", "Claude")]
 
 namespace GBHeads
 {
@@ -42,13 +42,50 @@ namespace GBHeads
 
         internal Camera Cam { get { return cam; } }
         // warstwa fizyki postaci - glowy uzywaja jej, zeby zderzac sie z postaciami i mapa tak samo jak one
-        internal int ActorLayer
+        internal int HeadLayer = -1;
+
+        // Wybiera warstwe fizyki, ktora zderza sie z jak najwieksza liczba warstw postaci i mapy
+        private void ComputeHeadLayer()
         {
-            get
+            try
             {
+                var rel = new int[32];
+                int ai = 0;
                 foreach (var a in actors)
-                    if (a.Hips != null) { try { return a.Hips.gameObject.layer; } catch { } }
-                return -1;
+                {
+                    if (ai++ >= 4) break;
+                    var cols = new List<Collider>();
+                    Il2.CollectColliders(a.Top, cols);
+                    foreach (var c in cols) if (c != null) rel[c.gameObject.layer] += 6;
+                }
+                int n = 0;
+                foreach (var o in Il2.FindAll(typeof(Collider)))
+                {
+                    var c = o as Collider;
+                    if (c == null || c.isTrigger) continue;
+                    rel[c.gameObject.layer]++;
+                    if (++n > 900) break;
+                }
+                int best = 0; long bestScore = -1;
+                var sb = new System.Text.StringBuilder();
+                for (int l = 0; l < 32; l++)
+                {
+                    long sc = 0;
+                    for (int r = 0; r < 32; r++)
+                        if (rel[r] > 0 && !Physics.GetIgnoreLayerCollision(l, r)) sc += rel[r];
+                    if (l < 12 || sc > 0) sb.Append(l + ":" + sc + " ");
+                    if (sc > bestScore) { bestScore = sc; best = l; }
+                }
+                HeadLayer = best;
+                string used = "";
+                for (int r = 0; r < 32; r++) if (rel[r] > 0) used += r + "(" + rel[r] + ") ";
+                LoggerInstance.Msg("Warstwy fizyki w scenie: " + used);
+                LoggerInstance.Msg("Warstwa glow: " + best + " (wynik " + bestScore + ")  [" + sb + "]");
+            }
+            catch (Exception e)
+            {
+                HeadLayer = 0;
+                LoggerInstance.Warning("Nie udalo sie wybrac warstwy glow: " + e.Message);
             }
         }
         internal float Depth = 12f;
@@ -77,6 +114,7 @@ namespace GBHeads
             actorMap.Clear();
             actors.Clear();
             cam = null;
+            HeadLayer = -1;
             camTimer = 0f;
             scanTimer = 0f;
             sceneTime = Time.time;
@@ -180,7 +218,7 @@ namespace GBHeads
         internal Vector3 ViewportToWorld(Vector2 vp)
         {
             if (cam == null) return Vector3.zero;
-            return cam.ViewportToWorldPoint(new Vector3(vp.x, vp.y, Mathf.Max(1f, Depth) * 0.92f));
+            return cam.ViewportToWorldPoint(new Vector3(vp.x, vp.y, Mathf.Max(1f, Depth) * 1.0f));
         }
 
         // Losuje punkt na ekranie (unika innych glow)
@@ -279,6 +317,7 @@ namespace GBHeads
 
                 actors.Clear();
                 actors.AddRange(actorMap.Values);
+                if (HeadLayer < 0 && actors.Count > 0) ComputeHeadLayer();
 
                 // rozmiar postaci i odleglosc od kamery (do skalowania glow i ustawiania ich w kadrze)
                 if (actors.Count > 0)

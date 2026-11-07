@@ -19,6 +19,8 @@ namespace GBHeads
         public int SpeakingClip = -1;
 
         private Transform rootT, modelT, jawT, lidAT, lidBT, teethT, tongueT, tipT, capAT, capBT;
+        private Transform[] ringT = new Transform[3];
+        private Renderer[] ringR = new Renderer[3];
         private Renderer mainR, darkR, teethR, tongueR, tipR, capAR, capBR;
         private Rigidbody rb;
         private SphereCollider col;
@@ -109,6 +111,11 @@ namespace GBHeads
             tongueR = Prim("Tongue", rootT, A.TongueMat, out tongueT);
             tipR = Prim("TongueTip", rootT, A.TongueMat, out tipT);
             tongueR.enabled = false; tipR.enabled = false;
+            for (int i = 0; i < 3; i++)
+            {
+                ringR[i] = Prim(PrimitiveType.Cylinder, "TongueWrap" + i, rootT, A.TongueMat, out ringT[i]);
+                ringR[i].enabled = false;
+            }
 
             audio = Root.AddComponent<AudioSource>();
             audio.playOnAwake = false;
@@ -195,7 +202,12 @@ namespace GBHeads
 
         private static Renderer Prim(string name, Transform parent, Material mat, out Transform t)
         {
-            var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            return Prim(PrimitiveType.Sphere, name, parent, mat, out t);
+        }
+
+        private static Renderer Prim(PrimitiveType pt, string name, Transform parent, Material mat, out Transform t)
+        {
+            var go = GameObject.CreatePrimitive(pt);
             go.name = name;
             var col = go.GetComponent<Collider>();
             if (col != null) UnityEngine.Object.DestroyImmediate(col);
@@ -219,6 +231,7 @@ namespace GBHeads
                 if (tipR != null) tipR.sharedMaterial = A.TongueMat;
                 if (capAR != null) capAR.sharedMaterial = A.LidMat;
                 if (capBR != null) capBR.sharedMaterial = A.LidMat;
+                for (int i = 0; i < 3; i++) if (ringR[i] != null) ringR[i].sharedMaterial = A.TongueMat;
             }
             catch { }
         }
@@ -269,7 +282,7 @@ namespace GBHeads
             {
                 pos = rootT.position;
                 vel = rb.velocity;
-                int al = M.ActorLayer;
+                int al = M.HeadLayer;
                 if (al >= 0 && al != baseLayer) { baseLayer = al; Root.layer = al; }
             }
 
@@ -429,6 +442,30 @@ namespace GBHeads
             {
                 if (tongueR.enabled) { tongueR.enabled = false; tipR.enabled = false; }
             }
+
+            // jezyk owija ofiare (kilka pierscieni wokol klatki piersiowej)
+            bool wrap = (st == St.Grab || st == St.Chew) && VictimValid();
+            if (wrap)
+            {
+                Vector3 axis = Vector3.up;
+                if (victim.Hips != null)
+                {
+                    Vector3 a2 = victim.Chest.position - victim.Hips.position;
+                    if (a2.sqrMagnitude > 1e-4f) axis = a2.normalized;
+                }
+                float d = hw * 0.30f;
+                for (int i = 0; i < 3; i++)
+                {
+                    ringT[i].position = victim.Chest.position + axis * ((i - 1) * d * 0.42f);
+                    ringT[i].rotation = Quaternion.FromToRotation(Vector3.up, axis) * Quaternion.Euler(Mathf.Sin(t * 5f + i) * 12f, 0f, Mathf.Cos(t * 4f + i * 2f) * 12f);
+                    ringT[i].localScale = new Vector3(d, d * 0.07f, d);
+                    ringR[i].enabled = true;
+                }
+            }
+            else if (ringR[0] != null && ringR[0].enabled)
+            {
+                for (int i = 0; i < 3; i++) ringR[i].enabled = false;
+            }
         }
 
         // ---------- Atak ----------
@@ -507,7 +544,7 @@ namespace GBHeads
             {
                 Rigidbody rb = vRbs[i];
                 if (rb == null) continue;
-                rb.velocity = dir * UnityEngine.Random.Range(11f, 17f) + UnityEngine.Random.insideUnitSphere * 3f;
+                rb.velocity = dir * UnityEngine.Random.Range(16f, 26f) + UnityEngine.Random.insideUnitSphere * 3f;
                 rb.angularVelocity = UnityEngine.Random.insideUnitSphere * 8f;
             }
         }

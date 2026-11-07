@@ -457,12 +457,25 @@ namespace GBHeads
             LidMat = MakeMat(sh, LidColor, null);
         }
 
+        private static Texture2D Solid(Color c)
+        {
+            var t = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            t.hideFlags = HideFlags.DontUnloadUnusedAsset;
+            for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++) t.SetPixel(x, y, c);
+            t.Apply(false, false);
+            return t;
+        }
+
         private static Material MakeMat(Shader sh, Color c, Texture tex)
         {
             var m = new Material(sh);
             m.hideFlags = HideFlags.DontUnloadUnusedAsset;
             try
             {
+                // shadery typu Unlit/Texture nie maja koloru - bez tekstury wychodzi bialy; dajemy jednolita teksture
+                if (tex == null) { tex = Solid(c); c = Color.white; }
+                m.renderQueue = 3100;       // po przezroczystych obiektach mapy - glowa nie jest przez nie "zamazywana"
+
                 if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", c);
                 if (m.HasProperty("_Color")) m.SetColor("_Color", c);
                 if (tex != null)
